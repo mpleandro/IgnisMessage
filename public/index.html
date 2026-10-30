@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Disparador WhatsApp</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Disparador WhatsApp <small>via N8N</small></h1>
+
+  <section class="card">
+    <h2>1. Webhook do N8N</h2>
+    <label>URL do webhook (POST)
+      <input id="webhookUrl" type="url" placeholder="https://n8n.seudominio.com/webhook/disparo">
+    </label>
+    <details>
+      <summary>Autenticação por header (opcional)</summary>
+      <div class="row">
+        <label>Nome do header <input id="headerName" placeholder="X-Api-Key"></label>
+        <label>Valor <input id="headerValue" type="password" autocomplete="off"></label>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>2. Base de contatos (CSV)</h2>
+    <input id="csvFile" type="file" accept=".csv,.txt">
+    <p id="csvInfo" class="muted">Nenhum arquivo carregado. A primeira linha deve conter os rótulos das colunas.</p>
+    <div id="phoneConfig" class="row" hidden>
+      <label>Coluna do telefone <select id="phoneCol"></select></label>
+      <label>DDI padrão (se número sem DDI) <input id="ddi" value="55" inputmode="numeric"></label>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>3. Mensagem</h2>
+    <textarea id="message" rows="7" placeholder="Olá {{nome}}, tudo bem? Vi que você é de {{cidade}}..."></textarea>
+    <p class="muted">Use <code>{{campo}}</code> com o nome exato de uma coluna do CSV. Campos que não existirem no CSV usarão sempre o valor padrão.</p>
+    <div id="vars"></div>
+  </section>
+
+  <section class="card">
+    <h2>4. Pré-visualização</h2>
+    <div class="row nav">
+      <button id="prev" type="button">←</button>
+      <span id="previewPos" class="muted">—</span>
+      <button id="next" type="button">→</button>
+    </div>
+    <div id="previewPhone" class="muted"></div>
+    <div id="preview" class="bubble">Carregue o CSV e escreva a mensagem.</div>
+    <p id="stats" class="muted"></p>
+    <details id="invalidBox" hidden>
+      <summary id="invalidSummary"></summary>
+      <button id="downloadInvalid" type="button">Baixar CSV dos inválidos</button>
+      <table id="invalidTable"><thead><tr><th>Linha</th><th>Valor</th><th>Erro</th></tr></thead><tbody></tbody></table>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>5. Cadência de envio</h2>
+    <div class="row">
+      <label>Intervalo mínimo (s) <input id="minDelay" type="number" min="0" value="8"></label>
+      <label>Intervalo máximo (s) <input id="maxDelay" type="number" min="0" value="20"></label>
+    </div>
+    <div class="row">
+      <label>Pausar a cada (nº de msgs, 0 = nunca) <input id="batchSize" type="number" min="0" value="30"></label>
+      <label>Duração da pausa (s) <input id="batchPause" type="number" min="0" value="300"></label>
+    </div>
+    <p class="muted">Intervalos aleatórios e pausas reduzem o risco de bloqueio do número pelo WhatsApp.</p>
+    <label class="check"><input id="windowEnabled" type="checkbox" checked> Enviar somente dentro da janela de horário</label>
+    <div id="windowConfig">
+      <div class="row">
+        <label>Das <input id="windowStart" type="time" value="09:00"></label>
+        <label>Até <input id="windowEnd" type="time" value="18:00"></label>
+      </div>
+      <div class="days" id="days"></div>
+      <p class="muted">Horário de Brasília (America/Sao_Paulo). Agora em Brasília: <b id="brClock">—</b>.
+        Fora da janela o disparo fica em espera e retoma sozinho.</p>
+    </div>
+  </section>
+
+  <section class="card actions">
+    <button id="testBtn" type="button">Enviar teste (1º contato)</button>
+    <button id="startBtn" type="button" class="primary">Iniciar disparo</button>
+    <span id="testResult" class="muted"></span>
+  </section>
+
+  <section class="card" id="progressCard" hidden>
+    <h2>Andamento</h2>
+    <div class="bar"><div id="barFill"></div></div>
+    <p id="progressText"></p>
+    <div class="actions">
+      <button id="pauseBtn" type="button">Pausar</button>
+      <button id="resumeBtn" type="button" hidden>Retomar</button>
+      <button id="cancelBtn" type="button" class="danger">Cancelar</button>
+    </div>
+    <table id="log"><thead><tr><th>#</th><th>Telefone</th><th>Status</th><th>Detalhe</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<script src="/vendor/papaparse.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
