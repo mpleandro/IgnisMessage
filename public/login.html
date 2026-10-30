@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrar · Disparador</title>
+<style>
+:root{--bg:#0f1115;--card:#181b22;--line:#2a2f3a;--text:#e7e9ee;--muted:#8b93a3;--accent:#25d366;--danger:#e5534b}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif;padding:16px}
+form{width:100%;max-width:360px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:28px 24px}
+h1{font-size:20px;margin:0 0 4px}p{color:var(--muted);font-size:13px;margin:0 0 20px}
+label{display:block;font-size:13px;color:var(--muted);margin-bottom:14px}
+input{display:block;width:100%;margin-top:4px;padding:10px;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:6px;font:inherit}
+input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+button{width:100%;padding:10px;border:0;border-radius:6px;background:var(--accent);color:#06210f;font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+#err{color:var(--danger);font-size:13px;min-height:20px;margin:0 0 10px}
+</style>
+</head>
+<body>
+<form id="f">
+  <h1>Disparador WhatsApp</h1>
+  <p>Entre para continuar.</p>
+  <label>Usuário <input name="user" autocomplete="username" required autofocus></label>
+  <label>Senha <input name="password" type="password" autocomplete="current-password" required></label>
+  <div id="err" role="alert"></div>
+  <button id="b">Entrar</button>
+</form>
+<script>
+const f=document.getElementById('f'),err=document.getElementById('err'),b=document.getElementById('b');
+f.addEventListener('submit',async e=>{
+  e.preventDefault();err.textContent='';b.disabled=true;
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user:f.user.value.trim(),password:f.password.value})});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok)location.href='/';else err.textContent=d.error||'Falha ao entrar.';
+  }catch{err.textContent='Erro de conexão.'}
+  b.disabled=false;
+});
+</script>
+</body>
+</html>

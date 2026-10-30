@@ -229,6 +229,7 @@ async function api(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {}),
   });
+  if (res.status === 401) { location.href = '/login'; throw new Error('Sessão expirada'); }
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
@@ -289,6 +290,11 @@ async function poll() {
   ).join('');
   if (['running', 'paused'].includes(c.status)) state.timer = setTimeout(poll, 1500);
 }
+
+document.getElementById('logout')?.addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  location.href = '/login';
+});
 
 // Retoma o acompanhamento se houver campanha ativa ao reabrir a página
 fetch('/api/campaigns').then((r) => r.json()).then((list) => {
