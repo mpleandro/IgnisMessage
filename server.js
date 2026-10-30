@@ -85,6 +85,15 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// Arquivos de mídia anexados: servidos sem login (o N8N precisa baixá-los), protegidos por um id aleatório e imprevisível.
+app.get('/media/:id/:name?', (req, res) => {
+  const m = readMediaMeta(req.params.id);
+  if (!m) return res.status(404).end();
+  res.type(m.mimetype);
+  res.set('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(m.name)}`);
+  res.sendFile(mediaPath(m.id));
+});
+
 app.use((req, res, next) => {
   if (isAuthed(req)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Não autenticado' });
@@ -105,6 +114,58 @@ const rand = (min, max) => min + Math.random() * (max - min);
 // Fora da pasta do projeto, para não se perder ao substituir/atualizar o código. No Docker: DATA_DIR=/app/data (volume).
 const DATA_DIR = process.env.DATA_DIR || path.join(os.homedir(), '.disparador');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+
+// ---------- Anexos (imagem / vídeo / documento) ----------
+const MEDIA_DIR = path.join(DATA_DIR, 'media');
+const MEDIA_MAX_BYTES = 50 * 1024 * 1024;
+const MEDIA_ID_RE = /^[a-f0-9]{32}$/;
+const mediaPath = (id) => path.join(MEDIA_DIR, id);
+const mediaTypeOf = (mime) => (mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'document');
+
+function readMediaMeta(id) {
+  if (!MEDIA_ID_RE.test(String(id))) return null;
+  try { return JSON.parse(fs.readFileSync(mediaPath(id) + '.json', 'utf8')); } catch { return null; }
+}
+
+function deleteMedia(id) {
+  if (!MEDIA_ID_RE.test(String(id))) return;
+  for (const c of campaigns.values()) {
+    if (c.media && c.media.id === id && ['running', 'paused'].includes(c.status)) return; // ainda em uso
+  }
+  fs.rmSync(mediaPath(id), { force: true });
+  fs.rmSync(mediaPath(id) + '.json', { force: true });
+}
+
+// Upload como corpo bruto (octet-stream); nome em X-File-Name (URL-encoded) e tipo em X-File-Type.
+app.post('/api/media', express.raw({ type: () => true, limit: MEDIA_MAX_BYTES }), (req, res) => {
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || !buf.length) return res.status(400).json({ error: 'Arquivo vazio' });
+  let name = 'arquivo';
+  try { name = decodeURIComponent(req.headers['x-file-name'] || '') || name; } catch {}
+  name = path.basename(name).replace(/[\x00-\x1f]/g, '').slice(0, 150) || 'arquivo';
+  const mimetype = String(req.headers['x-file-type'] || '').split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+  const id = crypto.randomBytes(16).toString('hex');
+  const meta = { id, name, mimetype, type: mediaTypeOf(mimetype), size: buf.length };
+  try {
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
+    fs.writeFileSync(mediaPath(id), buf, { mode: 0o600 });
+    fs.writeFileSync(mediaPath(id) + '.json', JSON.stringify(meta), { mode: 0o600 });
+  } catch (e) { return res.status(500).json({ error: 'Não foi possível salvar o arquivo: ' + e.message }); }
+  res.status(201).json(meta);
+});
+
+app.delete('/api/media/:id', (req, res) => {
+  deleteMedia(req.params.id);
+  res.json({ ok: true });
+});
+
+// Resolve o anexo enviado pelo front (apenas por id) e monta a URL pública para o N8N.
+function resolveMedia(req, id) {
+  if (!id) return null;
+  const m = readMediaMeta(id);
+  if (!m) return undefined;
+  return { ...m, url: `${req.protocol}://${req.get('host')}/media/${m.id}/${encodeURIComponent(m.name)}` };
+}
 
 // Migração: versões antigas guardavam tudo em ./data dentro do projeto.
 (function migrateLegacyData() {
@@ -261,9 +322,18 @@ async function http(url, { method = 'POST', headers = {}, body } = {}) {
 const evoUrl = (e, route) => `${e.baseUrl.replace(/\/+$/, '')}${route}/${encodeURIComponent(e.instance)}`;
 
 // Entrega uma mensagem pelo destino configurado (N8N ou Evolution direto).
-function deliver(dest, item, meta) {
+function deliver(dest, item, meta, media) {
   if (dest.mode === 'evolution') {
     const e = dest.evolution;
+    if (media) {
+      let data;
+      try { data = fs.readFileSync(mediaPath(media.id)).toString('base64'); }
+      catch { return Promise.resolve({ ok: false, status: 0, body: 'arquivo de mídia não encontrado' }); }
+      const body = e.version === 'v1'
+        ? { number: item.phone, mediaMessage: { mediatype: media.type, fileName: media.name, caption: item.message, media: data } }
+        : { number: item.phone, mediatype: media.type, mimetype: media.mimetype, caption: item.message, media: data, fileName: media.name };
+      return http(evoUrl(e, '/message/sendMedia'), { headers: { apikey: e.apiKey }, body });
+    }
     const body = e.version === 'v1'
       ? { number: item.phone, textMessage: { text: item.message } }
       : { number: item.phone, text: item.message };
@@ -273,7 +343,10 @@ function deliver(dest, item, meta) {
   const headers = n.headerName && n.headerValue ? { [n.headerName]: n.headerValue } : {};
   return http(n.url, {
     headers,
-    body: { ...meta, phone: item.phone, message: item.message, fields: item.fields || {} },
+    body: {
+      ...meta, phone: item.phone, message: item.message, fields: item.fields || {},
+      ...(media ? { media: { type: media.type, mimetype: media.mimetype, fileName: media.name, size: media.size, url: media.url } } : {}),
+    },
   });
 }
 
@@ -320,7 +393,7 @@ async function runCampaign(c) {
 
     const i = c.cursor;
     const item = c.items[i];
-    const result = await deliver(cfg.dest, item, { campaign_id: c.id, index: i + 1, total: c.items.length });
+    const result = await deliver(cfg.dest, item, { campaign_id: c.id, index: i + 1, total: c.items.length }, c.media);
     c.cursor++;
     if (result.ok) c.sent++;
     else c.failed++;
@@ -367,7 +440,9 @@ app.post('/api/test', async (req, res) => {
   const err = destError(settings);
   if (err) return res.status(400).json({ error: err });
   const item = req.body.item || {};
-  res.json(await deliver(settings, item, { campaign_id: 'teste', index: 1, total: 1 }));
+  const media = resolveMedia(req, req.body.mediaId);
+  if (media === undefined) return res.status(400).json({ error: 'Arquivo anexado não encontrado. Anexe novamente.' });
+  res.json(await deliver(settings, item, { campaign_id: 'teste', index: 1, total: 1 }, media));
 });
 
 // Teste de conexão do destino salvo. Evolution: consulta o estado da instância (não envia nada).
@@ -396,12 +471,16 @@ app.post('/api/campaigns', (req, res) => {
   const items = Array.isArray(req.body.items) ? req.body.items : [];
   if (!items.length) return res.status(400).json({ error: 'Nenhum contato para enviar' });
 
+  const media = resolveMedia(req, req.body.mediaId);
+  if (media === undefined) return res.status(400).json({ error: 'Arquivo anexado não encontrado. Anexe novamente.' });
+
   const minDelay = Math.max(0, Number(req.body.minDelay) || 0);
   const maxDelay = Math.max(minDelay, Number(req.body.maxDelay) || minDelay);
   const c = {
     id: crypto.randomUUID(),
     status: 'running',
     items,
+    media,
     cursor: 0,
     sent: 0,
     failed: 0,

@@ -43,6 +43,15 @@ Local dos arquivos: `~/.disparador/` ao rodar direto com Node (fora da pasta do 
 No N8N: Webhook (POST) → nó de WhatsApp (Evolution API / Z-API / WhatsApp Cloud etc.) usando `{{$json.body.phone}}` e `{{$json.body.message}}`.
 Responda rápido (Respond: Immediately) para o disparador não esperar o envio terminar.
 
+## Anexos (imagem, vídeo, documento)
+Na etapa **Mensagem** dá para anexar um arquivo (até 50 MB); o texto vira a legenda. O mesmo arquivo vai para todos os contatos do disparo. Os arquivos ficam em `media/` dentro da pasta de dados.
+- **Evolution direto**: usa `POST /message/sendMedia/{instancia}` com o arquivo em base64 (v1 e v2).
+- **N8N**: o payload ganha o campo `media`, e o arquivo é baixado pela URL (precisa ser acessível pelo N8N, então use o domínio público com HTTPS):
+```json
+"media": { "type": "image|video|document", "mimetype": "image/png", "fileName": "foto.png", "size": 123456, "url": "https://disparo.seudominio.com/media/<id>/foto.png" }
+```
+A rota `/media/<id>` é pública (o N8N precisa baixar sem login), protegida por um id aleatório de 128 bits. Se usar proxy reverso, aumente o limite de upload (Nginx: `client_max_body_size 50m`).
+
 ## Notas
 - A fila roda no servidor: pode fechar o navegador. Ao reabrir, o andamento é retomado.
 - O estado da fila fica em memória: reiniciar o container interrompe campanhas em andamento.
