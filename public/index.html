@@ -8,20 +8,14 @@
 </head>
 <body>
 <main>
-  <h1>Disparador WhatsApp <small>via N8N</small> <button id="logout" type="button" style="float:right;font-size:12px;padding:4px 10px;background:none;color:#8b93a3;border:1px solid #2a2f3a;border-radius:6px;cursor:pointer">Sair</button></h1>
+  <h1>Disparador WhatsApp <small>N8N / Evolution</small> <a href="/settings.html" class="link" style="float:right;margin-right:10px">⚙ Configurações</a><button id="logout" type="button" style="float:right;font-size:12px;padding:4px 10px;background:none;color:#8b93a3;border:1px solid #2a2f3a;border-radius:6px;cursor:pointer">Sair</button></h1>
 
   <section class="card">
-    <h2>1. Webhook do N8N</h2>
-    <label>URL do webhook (POST)
-      <input id="webhookUrl" type="url" placeholder="https://n8n.seudominio.com/webhook/disparo">
-    </label>
-    <details>
-      <summary>Autenticação por header (opcional)</summary>
-      <div class="row">
-        <label>Nome do header <input id="headerName" placeholder="X-Api-Key"></label>
-        <label>Valor <input id="headerValue" type="password" autocomplete="off"></label>
-      </div>
-    </details>
+    <h2>1. Destino</h2>
+    <div class="actions">
+      <span id="destInfo" class="muted">Carregando…</span>
+      <a href="/settings.html" class="link">Configurações</a>
+    </div>
   </section>
 
   <section class="card">

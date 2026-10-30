@@ -5,7 +5,7 @@ const VAR_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
 const norm = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
 
 // ---------- Persistência local das configurações ----------
-for (const id of ['webhookUrl', 'headerName', 'minDelay', 'maxDelay', 'batchSize', 'batchPause', 'ddi', 'windowStart', 'windowEnd']) {
+for (const id of ['minDelay', 'maxDelay', 'batchSize', 'batchPause', 'ddi', 'windowStart', 'windowEnd']) {
   const saved = localStorage.getItem('disp_' + id);
   if (saved !== null) $(id).value = saved;
   $(id).addEventListener('input', () => localStorage.setItem('disp_' + id, $(id).value));
@@ -206,12 +206,19 @@ $('ddi').addEventListener('input', renderPreview);
 $('prev').addEventListener('click', () => { state.previewIdx--; renderPreview(); });
 $('next').addEventListener('click', () => { state.previewIdx++; renderPreview(); });
 
+// ---------- Destino (configurado em /settings.html) ----------
+fetch('/api/settings').then((r) => r.json()).then((s) => {
+  const el = $('destInfo');
+  state.destReady = s.ready;
+  if (!s.ready) { el.textContent = '⚠ Destino não configurado — abra Configurações.'; el.className = 'err-text'; return; }
+  el.textContent = s.mode === 'evolution'
+    ? `Evolution direto · ${s.evolution.baseUrl} · instância ${s.evolution.instance}`
+    : `N8N · ${s.n8n.url}`;
+}).catch(() => {});
+
 // ---------- Envio ----------
 function config() {
   return {
-    webhookUrl: $('webhookUrl').value.trim(),
-    headerName: $('headerName').value.trim(),
-    headerValue: $('headerValue').value,
     minDelay: Number($('minDelay').value),
     maxDelay: Number($('maxDelay').value),
     batchSize: Number($('batchSize').value),
@@ -245,11 +252,12 @@ $('testBtn').addEventListener('click', async () => {
   $('testResult').textContent = 'Enviando…';
   try {
     const r = await api('/api/test', { ...config(), item: items[0] });
-    $('testResult').textContent = r.ok ? `✔ Webhook respondeu ${r.status}` : `✖ Falhou (${r.status}): ${r.body}`;
+    $('testResult').textContent = r.ok ? `✔ Destino respondeu ${r.status}` : `✖ Falhou (${r.status}): ${r.body}`;
   } catch (e) { $('testResult').textContent = '✖ ' + e.message; }
 });
 
 $('startBtn').addEventListener('click', async () => {
+  if (state.destReady === false) return alert('Configure o destino (N8N ou Evolution) em Configurações.');
   const items = validItems();
   if (!items.length) return alert('Nenhum contato válido.');
   if (!confirm(`Disparar ${items.length} mensagens agora?`)) return;

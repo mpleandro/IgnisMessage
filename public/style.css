@@ -46,3 +46,8 @@ label.check input { width: auto; margin: 0; }
 details summary { cursor: pointer; margin: 8px 0; }
 #invalidBox summary { color: var(--danger); }
 .ok-text { color: var(--accent); } .err-text { color: var(--danger); }
+a.link { color: var(--accent); font-size: 13px; font-weight: 400; text-decoration: none; }
+a.link:hover { text-decoration: underline; }
+h1 a.link { float: right; margin-top: 6px; }
+.card.dim { opacity: .55; }
+label.check span { line-height: 1.4; }
