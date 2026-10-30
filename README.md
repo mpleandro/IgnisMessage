@@ -16,7 +16,14 @@ docker compose up -d --build
 Coloque atrás de HTTPS (Caddy/Nginx/Traefik) — a senha usa tela de login (cookie de sessão); use HTTPS.
 Exemplo Caddy: `disparo.seudominio.com { reverse_proxy localhost:3000 }`
 
-## Payload enviado ao webhook (POST JSON, um por contato)
+## Configurações (⚙ no topo da página)
+Em `/settings.html` você escolhe o destino do disparo e informa as credenciais:
+- **N8N** — URL do webhook (+ header de autenticação opcional). O servidor envia um POST por contato.
+- **Evolution API direto** (opcional) — URL, nome da instância, API Key e versão (v1/v2). O servidor chama `POST /message/sendText/{instancia}` sem passar pelo N8N. "Salvar e testar conexão" só consulta o estado da instância.
+
+As configurações ficam em `data/settings.json` (permissão 600, volume `disparador-data` no Docker), então sobrevivem a reinícios. Chaves e valores de header nunca voltam para o navegador (aparecem mascaradas); deixar o campo em branco mantém o valor salvo.
+
+## Payload enviado ao webhook (modo N8N) (POST JSON, um por contato)
 ```json
 {
   "campaign_id": "uuid",

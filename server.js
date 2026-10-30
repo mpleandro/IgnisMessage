@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 
@@ -96,16 +97,106 @@ const campaigns = new Map();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (min, max) => min + Math.random() * (max - min);
 
-async function postWebhook(cfg, payload) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (cfg.headerName && cfg.headerValue) headers[cfg.headerName] = cfg.headerValue;
+// ---------- Configurações (N8N / Evolution), salvas em disco ----------
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const DEFAULT_SETTINGS = {
+  mode: 'n8n', // 'n8n' = o N8N envia | 'evolution' = o servidor chama a Evolution API direto
+  n8n: { url: '', headerName: '', headerValue: '' },
+  evolution: { baseUrl: '', apiKey: '', instance: '', version: 'v2' },
+};
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    return {
+      mode: saved.mode === 'evolution' ? 'evolution' : 'n8n',
+      n8n: { ...DEFAULT_SETTINGS.n8n, ...saved.n8n },
+      evolution: { ...DEFAULT_SETTINGS.evolution, ...saved.evolution },
+    };
+  } catch {
+    return structuredClone(DEFAULT_SETTINGS);
+  }
+}
+
+function persistSettings(s) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = SETTINGS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(s, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, SETTINGS_FILE);
+}
+
+let settings = loadSettings();
+
+const isHttpUrl = (u) => {
+  try { return ['http:', 'https:'].includes(new URL(u).protocol); } catch { return false; }
+};
+const str = (v) => (typeof v === 'string' ? v.trim() : '');
+
+// Retorna o motivo pelo qual o destino ativo não pode ser usado, ou null.
+function destError(s) {
+  if (s.mode === 'evolution') {
+    const e = s.evolution;
+    if (!isHttpUrl(e.baseUrl)) return 'Configure a URL da Evolution API em Configurações';
+    if (!e.apiKey) return 'Configure a API Key da Evolution em Configurações';
+    if (!e.instance) return 'Configure o nome da instância da Evolution em Configurações';
+    return null;
+  }
+  if (!isHttpUrl(s.n8n.url)) return 'Configure a URL do webhook do N8N em Configurações';
+  return null;
+}
+
+const mask = (v) => (v ? '••••••' + v.slice(-4) : '');
+function publicSettings(s) {
+  return {
+    mode: s.mode,
+    n8n: { url: s.n8n.url, headerName: s.n8n.headerName, headerValueMasked: mask(s.n8n.headerValue) },
+    evolution: {
+      baseUrl: s.evolution.baseUrl, instance: s.evolution.instance, version: s.evolution.version,
+      apiKeyMasked: mask(s.evolution.apiKey),
+    },
+    ready: !destError(s),
+  };
+}
+
+app.get('/api/settings', (req, res) => res.json(publicSettings(settings)));
+
+app.put('/api/settings', (req, res) => {
+  const b = req.body || {};
+  const next = structuredClone(settings);
+  next.mode = b.mode === 'evolution' ? 'evolution' : 'n8n';
+  if (b.n8n) {
+    const url = str(b.n8n.url);
+    if (url && !isHttpUrl(url)) return res.status(400).json({ error: 'URL do webhook do N8N inválida (use http:// ou https://)' });
+    next.n8n.url = url;
+    next.n8n.headerName = str(b.n8n.headerName);
+    if (typeof b.n8n.headerValue === 'string' && b.n8n.headerValue) next.n8n.headerValue = b.n8n.headerValue; // vazio = mantém
+    if (!next.n8n.headerName) next.n8n.headerValue = '';
+  }
+  if (b.evolution) {
+    const base = str(b.evolution.baseUrl).replace(/\/+$/, '');
+    if (base && !isHttpUrl(base)) return res.status(400).json({ error: 'URL da Evolution API inválida (use http:// ou https://)' });
+    next.evolution.baseUrl = base;
+    next.evolution.instance = str(b.evolution.instance);
+    next.evolution.version = b.evolution.version === 'v1' ? 'v1' : 'v2';
+    if (typeof b.evolution.apiKey === 'string' && b.evolution.apiKey.trim()) next.evolution.apiKey = b.evolution.apiKey.trim(); // vazio = mantém
+  }
+  const err = destError(next);
+  if (err) return res.status(400).json({ error: err.replace(' em Configurações', '') });
+  try { persistSettings(next); } catch (e) { return res.status(500).json({ error: 'Não foi possível salvar: ' + e.message }); }
+  settings = next;
+  res.json(publicSettings(settings));
+});
+
+// ---------- Envio ----------
+async function http(url, { method = 'POST', headers = {}, body } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 30000);
   try {
-    const res = await fetch(cfg.webhookUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
+    const res = await fetch(url, {
+      method,
+      headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: ctrl.signal,
     });
     const text = await res.text();
@@ -117,15 +208,23 @@ async function postWebhook(cfg, payload) {
   }
 }
 
-function validateConfig(body) {
-  let url;
-  try {
-    url = new URL(body.webhookUrl);
-  } catch {
-    return 'URL do webhook inválida';
+const evoUrl = (e, route) => `${e.baseUrl.replace(/\/+$/, '')}${route}/${encodeURIComponent(e.instance)}`;
+
+// Entrega uma mensagem pelo destino configurado (N8N ou Evolution direto).
+function deliver(dest, item, meta) {
+  if (dest.mode === 'evolution') {
+    const e = dest.evolution;
+    const body = e.version === 'v1'
+      ? { number: item.phone, textMessage: { text: item.message } }
+      : { number: item.phone, text: item.message };
+    return http(evoUrl(e, '/message/sendText'), { headers: { apikey: e.apiKey }, body });
   }
-  if (!['http:', 'https:'].includes(url.protocol)) return 'URL do webhook deve ser http(s)';
-  return null;
+  const n = dest.n8n;
+  const headers = n.headerName && n.headerValue ? { [n.headerName]: n.headerValue } : {};
+  return http(n.url, {
+    headers,
+    body: { ...meta, phone: item.phone, message: item.message, fields: item.fields || {} },
+  });
 }
 
 // ---------- Janela de envio (horário de Brasília) ----------
@@ -171,14 +270,7 @@ async function runCampaign(c) {
 
     const i = c.cursor;
     const item = c.items[i];
-    const result = await postWebhook(cfg, {
-      campaign_id: c.id,
-      index: i + 1,
-      total: c.items.length,
-      phone: item.phone,
-      message: item.message,
-      fields: item.fields || {},
-    });
+    const result = await deliver(cfg.dest, item, { campaign_id: c.id, index: i + 1, total: c.items.length });
     c.cursor++;
     if (result.ok) c.sent++;
     else c.failed++;
@@ -222,22 +314,34 @@ function summary(c, withLog) {
 }
 
 app.post('/api/test', async (req, res) => {
-  const err = validateConfig(req.body);
+  const err = destError(settings);
   if (err) return res.status(400).json({ error: err });
   const item = req.body.item || {};
-  const result = await postWebhook(req.body, {
-    campaign_id: 'teste',
-    index: 1,
-    total: 1,
-    phone: item.phone,
-    message: item.message,
-    fields: item.fields || {},
-  });
-  res.json(result);
+  res.json(await deliver(settings, item, { campaign_id: 'teste', index: 1, total: 1 }));
+});
+
+// Teste de conexão do destino salvo. Evolution: consulta o estado da instância (não envia nada).
+// N8N: envia um ping { event: 'ping', test: true } ao webhook.
+app.post('/api/settings/test', async (req, res) => {
+  const target = req.body && req.body.target === 'evolution' ? 'evolution' : 'n8n';
+  const probe = { ...settings, mode: target };
+  const err = destError(probe);
+  if (err) return res.status(400).json({ error: err });
+  if (target === 'evolution') {
+    const r = await http(evoUrl(settings.evolution, '/instance/connectionState'), {
+      method: 'GET', headers: { apikey: settings.evolution.apiKey },
+    });
+    let state = null;
+    try { const j = JSON.parse(r.body); state = (j.instance && j.instance.state) || j.state || null; } catch {}
+    return res.json({ ...r, state });
+  }
+  const n = settings.n8n;
+  const headers = n.headerName && n.headerValue ? { [n.headerName]: n.headerValue } : {};
+  res.json(await http(n.url, { headers, body: { event: 'ping', test: true } }));
 });
 
 app.post('/api/campaigns', (req, res) => {
-  const err = validateConfig(req.body);
+  const err = destError(settings);
   if (err) return res.status(400).json({ error: err });
   const items = Array.isArray(req.body.items) ? req.body.items : [];
   if (!items.length) return res.status(400).json({ error: 'Nenhum contato para enviar' });
@@ -255,9 +359,7 @@ app.post('/api/campaigns', (req, res) => {
     nextAt: null,
     createdAt: Date.now(),
     cfg: {
-      webhookUrl: req.body.webhookUrl,
-      headerName: req.body.headerName,
-      headerValue: req.body.headerValue,
+      dest: structuredClone(settings), // snapshot: mudar as configurações não afeta campanhas em andamento
       minDelay,
       maxDelay,
       batchSize: Math.max(0, parseInt(req.body.batchSize, 10) || 0),
