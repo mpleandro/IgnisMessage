@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configurações · Disparador</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="event-strip">MÉTODO IGNIS <span>✳</span> DISPARADOR WHATSAPP <span>✳</span> HORÁRIO DE BRASÍLIA</div>
+<header class="site-header wrap">
+  <a class="brand" href="/"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="176" height="47"></a>
+  <div class="nav-right"><a class="header-cta" href="/">← Voltar ao disparador</a></div>
+</header>
+<main>
+  <div class="hero-title">
+    <h1>Configu<span class="stroke">rações</span></h1>
+    <p>Destino do disparo · N8N e Evolution API</p>
+  </div>
+
+  <section class="card">
+    <h2>Destino do disparo</h2>
+    <label class="check"><input type="radio" name="mode" value="n8n" checked> <span><b>N8N</b> — o servidor envia cada mensagem ao webhook do N8N e o fluxo cuida do WhatsApp</span></label>
+    <label class="check"><input type="radio" name="mode" value="evolution"> <span><b>Evolution API direto</b> — o servidor envia pela Evolution, sem passar pelo N8N</span></label>
+  </section>
+
+  <section class="card" id="n8nCard">
+    <h2>N8N</h2>
+    <label>URL do webhook (POST)
+      <input id="n8nUrl" type="url" placeholder="https://n8n.seudominio.com/webhook/disparo" autocomplete="off">
+    </label>
+    <details>
+      <summary>Autenticação por header (opcional)</summary>
+      <div class="row">
+        <label>Nome do header <input id="n8nHeaderName" placeholder="X-Api-Key" autocomplete="off"></label>
+        <label>Valor <input id="n8nHeaderValue" type="password" autocomplete="new-password"></label>
+      </div>
+    </details>
+    <div class="actions">
+      <button id="testN8n" type="button">Salvar e enviar ping</button>
+      <span id="n8nResult" class="muted"></span>
+    </div>
+    <p class="muted">O ping envia <code>{"event":"ping","test":true}</code> ao webhook — o fluxo do N8N será executado uma vez.</p>
+  </section>
+
+  <section class="card" id="evoCard">
+    <h2>Evolution API <small class="muted">(só se for usar o modo direto)</small></h2>
+    <div class="row">
+      <label>URL da Evolution <input id="evoUrl" type="url" placeholder="https://evolution.seudominio.com" autocomplete="off"></label>
+      <label>Nome da instância <input id="evoInstance" placeholder="minha-instancia" autocomplete="off"></label>
+    </div>
+    <div class="row">
+      <label>API Key <input id="evoKey" type="password" autocomplete="new-password"></label>
+      <label>Versão da API
+        <select id="evoVersion"><option value="v2">v2 (atual)</option><option value="v1">v1</option></select>
+      </label>
+    </div>
+    <div class="actions">
+      <button id="testEvo" type="button">Salvar e testar conexão</button>
+      <span id="evoResult" class="muted"></span>
+    </div>
+    <p class="muted">O teste só consulta o estado da instância; nenhuma mensagem é enviada.</p>
+  </section>
+
+  <section class="card actions">
+    <button id="save" type="button" class="primary">Salvar configurações</button>
+    <span id="saveResult" class="muted"></span>
+  </section>
+</main>
+<footer class="wrap site-footer"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="120" height="32" loading="lazy"><span>MÉTODO IGNIS © 2026</span></footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const modeInputs = [...document.querySelectorAll('input[name=mode]')];
+const mode = () => modeInputs.find((i) => i.checked).value;
+
+function applyMode() {
+  $('n8nCard').classList.toggle('dim', mode() !== 'n8n');
+  $('evoCard').classList.toggle('dim', mode() !== 'evolution');
+}
+modeInputs.forEach((i) => i.addEventListener('change', applyMode));
+
+function fill(s) {
+  modeInputs.forEach((i) => { i.checked = i.value === s.mode; });
+  $('n8nUrl').value = s.n8n.url;
+  $('n8nHeaderName').value = s.n8n.headerName;
+  $('n8nHeaderValue').value = '';
+  $('n8nHeaderValue').placeholder = s.n8n.headerValueMasked ? s.n8n.headerValueMasked + ' (salvo — vazio mantém)' : '';
+  $('evoUrl').value = s.evolution.baseUrl;
+  $('evoInstance').value = s.evolution.instance;
+  $('evoVersion').value = s.evolution.version;
+  $('evoKey').value = '';
+  $('evoKey').placeholder = s.evolution.apiKeyMasked ? s.evolution.apiKeyMasked + ' (salva — vazio mantém)' : '';
+  applyMode();
+}
+
+async function call(path, method, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) { location.href = '/login'; throw new Error('Sessão expirada'); }
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+async function save() {
+  const s = await call('/api/settings', 'PUT', {
+    mode: mode(),
+    n8n: { url: $('n8nUrl').value, headerName: $('n8nHeaderName').value, headerValue: $('n8nHeaderValue').value },
+    evolution: { baseUrl: $('evoUrl').value, instance: $('evoInstance').value, version: $('evoVersion').value, apiKey: $('evoKey').value },
+  });
+  fill(s);
+  return s;
+}
+
+$('save').addEventListener('click', async () => {
+  $('saveResult').textContent = 'Salvando…';
+  try { await save(); $('saveResult').textContent = '✔ Configurações salvas'; }
+  catch (e) { $('saveResult').textContent = '✖ ' + e.message; }
+});
+
+async function testTarget(target, out) {
+  $(out).textContent = 'Testando…';
+  try {
+    await save();
+    const r = await call('/api/settings/test', 'POST', { target });
+    if (target === 'evolution') {
+      $(out).textContent = r.ok
+        ? (r.state === 'open' ? '✔ Instância conectada (open)' : `⚠ Instância encontrada, estado: ${r.state || 'desconhecido'}`)
+        : `✖ Falhou (${r.status}): ${r.body}`;
+    } else {
+      $(out).textContent = r.ok ? `✔ Webhook respondeu ${r.status}` : `✖ Falhou (${r.status}): ${r.body}`;
+    }
+  } catch (e) { $(out).textContent = '✖ ' + e.message; }
+}
+$('testN8n').addEventListener('click', () => testTarget('n8n', 'n8nResult'));
+$('testEvo').addEventListener('click', () => testTarget('evolution', 'evoResult'));
+
+call('/api/settings', 'GET').then(fill).catch((e) => { $('saveResult').textContent = '✖ ' + e.message; });
+</script>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Disparador WhatsApp</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="event-strip">MÉTODO IGNIS <span>✳</span> DISPARADOR WHATSAPP <span>✳</span> HORÁRIO DE BRASÍLIA</div>
+<header class="site-header wrap">
+  <a class="brand" href="/"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="176" height="47"></a>
+  <div class="nav-right"><a class="header-cta" href="/settings.html">Configurações <span>↗</span></a><button id="logout" type="button" class="nav-btn">Sair</button></div>
+</header>
+<main>
+  <div class="hero-title">
+    <h1>Disparador <span class="stroke">WhatsApp</span></h1>
+    <p>Envio em massa via N8N ou Evolution API</p>
+  </div>
+
+  <section class="card">
+    <div class="group-label"><span>1</span>Destino</div>
+    <div class="actions">
+      <span id="destInfo" class="muted">Carregando…</span>
+      <a href="/settings.html" class="link">Alterar ↗</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="group-label"><span>2</span>Contatos</div>
+    <input id="csvFile" type="file" accept=".csv,.txt">
+    <p id="csvInfo" class="muted">Nenhum arquivo carregado. A primeira linha deve conter os rótulos das colunas.</p>
+    <label>Ou digite números manualmente (um por linha, ou separados por vírgula / ponto e vírgula)
+      <textarea id="manualNumbers" rows="4" placeholder="(11) 99999-8888&#10;21988887777, 31977776666"></textarea>
+    </label>
+    <p id="manualInfo" class="muted">Os números digitados são somados aos do CSV (se houver). Campos {{variável}} usam o valor padrão nesses contatos.</p>
+    <div id="phoneConfig" class="row" hidden>
+      <label>Coluna do telefone <select id="phoneCol"></select></label>
+      <label>DDI padrão (se número sem DDI) <input id="ddi" value="55" inputmode="numeric"></label>
+    </div>
+    <div id="csvPreview" hidden>
+      <p class="muted" id="csvPreviewInfo"></p>
+      <div class="tablewrap"><table id="csvTable"></table></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="group-label"><span>3</span>Mensagem</div>
+    <textarea id="message" rows="7" placeholder="Olá {{nome}}, tudo bem? Vi que você é de {{cidade}}..."></textarea>
+    <p class="muted">Use <code>{{campo}}</code> com o nome exato de uma coluna do CSV. Campos que não existirem no CSV usarão sempre o valor padrão.</p>
+    <div id="vars"></div>
+  </section>
+
+  <section class="card">
+    <div class="group-label"><span>4</span>Pré-visualização</div>
+    <div class="row nav">
+      <button id="prev" type="button">←</button>
+      <span id="previewPos" class="muted">—</span>
+      <button id="next" type="button">→</button>
+    </div>
+    <div id="previewPhone" class="muted"></div>
+    <div id="preview" class="bubble">Carregue o CSV e escreva a mensagem.</div>
+    <p id="stats" class="muted"></p>
+    <details id="invalidBox" hidden>
+      <summary id="invalidSummary"></summary>
+      <button id="downloadInvalid" type="button">Baixar CSV dos inválidos</button>
+      <table id="invalidTable"><thead><tr><th>Origem</th><th>Valor</th><th>Erro</th></tr></thead><tbody></tbody></table>
+    </details>
+  </section>
+
+  <section class="card">
+    <div class="group-label"><span>5</span>Cadência de envio</div>
+    <div class="row">
+      <label>Intervalo mínimo (s) <input id="minDelay" type="number" min="0" value="8"></label>
+      <label>Intervalo máximo (s) <input id="maxDelay" type="number" min="0" value="20"></label>
+    </div>
+    <div class="row">
+      <label>Pausar a cada (nº de msgs, 0 = nunca) <input id="batchSize" type="number" min="0" value="30"></label>
+      <label>Duração da pausa (s) <input id="batchPause" type="number" min="0" value="300"></label>
+    </div>
+    <p class="muted">Intervalos aleatórios e pausas reduzem o risco de bloqueio do número pelo WhatsApp.</p>
+    <label class="check"><input id="windowEnabled" type="checkbox" checked> Enviar somente dentro da janela de horário</label>
+    <div id="windowConfig">
+      <div class="row">
+        <label>Das <input id="windowStart" type="time" value="09:00"></label>
+        <label>Até <input id="windowEnd" type="time" value="18:00"></label>
+      </div>
+      <div class="days" id="days"></div>
+      <p class="muted">Horário de Brasília (America/Sao_Paulo). Agora em Brasília: <b id="brClock">—</b>.
+        Fora da janela o disparo fica em espera e retoma sozinho.</p>
+    </div>
+  </section>
+
+  <section class="card actions">
+    <button id="testBtn" type="button">Enviar teste (1º contato)</button>
+    <button id="startBtn" type="button" class="primary">Iniciar disparo</button>
+    <span id="testResult" class="muted"></span>
+  </section>
+
+  <section class="card" id="progressCard" hidden>
+    <div class="group-label"><span>↗</span>Andamento</div>
+    <div class="bar"><div id="barFill"></div></div>
+    <p id="progressText"></p>
+    <div class="actions">
+      <button id="pauseBtn" type="button">Pausar</button>
+      <button id="resumeBtn" type="button" hidden>Retomar</button>
+      <button id="cancelBtn" type="button" class="danger">Cancelar</button>
+    </div>
+    <table id="log"><thead><tr><th>#</th><th>Telefone</th><th>Status</th><th>Detalhe</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<footer class="wrap site-footer"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="120" height="32" loading="lazy"><span>MÉTODO IGNIS © 2026</span></footer>
+<script src="/vendor/papaparse.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
