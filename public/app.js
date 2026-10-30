@@ -12,6 +12,23 @@ for (const id of ['minDelay', 'maxDelay', 'batchSize', 'batchPause', 'ddi', 'win
 }
 
 // ---------- CSV ----------
+function loadCsv(rows, headers, name, restored) {
+  state.csvRows = rows;
+  state.headers = headers;
+  state.csvName = name;
+  $('csvInfo').textContent = `${restored ? name + ' (restaurado) · ' : ''}${rows.length} linhas · colunas: ${headers.join(', ')}`;
+  $('phoneCol').innerHTML = headers.map((h) => `<option>${esc(h)}</option>`).join('');
+  if (!restored) {
+    const guess = headers.find((h) => /(whats|telefone|celular|phone|fone|numero|número)/i.test(h));
+    if (guess) $('phoneCol').value = guess;
+  }
+  $('phoneConfig').hidden = false;
+  state.previewIdx = 0;
+  renderCsvTable();
+  renderVars(true);
+  renderPreview();
+}
+
 $('csvFile').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -20,19 +37,35 @@ $('csvFile').addEventListener('change', (e) => {
     skipEmptyLines: 'greedy',
     transformHeader: (h) => h.trim(),
     complete: (res) => {
-      state.csvRows = res.data;
-      state.headers = res.meta.fields || [];
-      $('csvInfo').textContent = `${state.csvRows.length} linhas · colunas: ${state.headers.join(', ')}`;
-      $('phoneCol').innerHTML = state.headers.map((h) => `<option>${esc(h)}</option>`).join('');
-      const guess = state.headers.find((h) => /(whats|telefone|celular|phone|fone|numero|número)/i.test(h));
-      if (guess) $('phoneCol').value = guess;
-      $('phoneConfig').hidden = false;
-      state.previewIdx = 0;
-      renderVars(true);
-      renderPreview();
+      loadCsv(res.data, res.meta.fields || [], file.name, false);
+      state.csvDirty = true;
+      scheduleSave();
     },
     error: (err) => alert('Erro ao ler CSV: ' + err.message),
   });
+});
+
+// Tabela com as primeiras linhas do CSV; clicar no cabeçalho insere {{coluna}} na mensagem.
+function renderCsvTable() {
+  const sample = state.csvRows.slice(0, 5);
+  $('csvPreview').hidden = !state.headers.length;
+  $('csvPreviewInfo').textContent =
+    `Primeiras ${sample.length} de ${state.csvRows.length} linhas. Clique no nome de uma coluna para inserir {{coluna}} na mensagem.`;
+  $('csvTable').innerHTML =
+    '<thead><tr>' + state.headers.map((h) => `<th title="Inserir {{${esc(h)}}}" data-col="${esc(h)}">${esc(h)}</th>`).join('') + '</tr></thead>' +
+    '<tbody>' + sample.map((r) => '<tr>' + state.headers.map((h) => `<td title="${esc(r[h] ?? '')}">${esc(r[h] ?? '')}</td>`).join('') + '</tr>').join('') + '</tbody>';
+}
+
+$('csvTable').addEventListener('click', (e) => {
+  const col = e.target.dataset && e.target.dataset.col;
+  if (!col) return;
+  const ta = $('message');
+  const tag = `{{${col}}}`;
+  const a = ta.selectionStart ?? ta.value.length, b = ta.selectionEnd ?? ta.value.length;
+  ta.value = ta.value.slice(0, a) + tag + ta.value.slice(b);
+  ta.focus();
+  ta.setSelectionRange(a + tag.length, a + tag.length);
+  renderPreview();
 });
 
 function esc(s) {
@@ -134,12 +167,16 @@ function parseManual(text) {
   return text.split(/[\n,;\t]+/).map((t) => t.trim()).filter(Boolean);
 }
 
-$('manualNumbers').addEventListener('input', () => {
-  state.manual = parseManual($('manualNumbers').value);
-  state.previewIdx = 0;
+function updateManualInfo() {
   $('manualInfo').textContent = state.manual.length
     ? `${state.manual.length} número(s) digitado(s), somados ao CSV (se houver). Campos {{variável}} usam o valor padrão nesses contatos.`
     : 'Os números digitados são somados aos do CSV (se houver). Campos {{variável}} usam o valor padrão nesses contatos.';
+}
+
+$('manualNumbers').addEventListener('input', () => {
+  state.manual = parseManual($('manualNumbers').value);
+  state.previewIdx = 0;
+  updateManualInfo();
   renderPreview();
 });
 
@@ -334,3 +371,83 @@ fetch('/api/campaigns').then((r) => r.json()).then((list) => {
   const active = list.find((c) => ['running', 'paused'].includes(c.status));
   if (active) { state.campaignId = active.id; $('progressCard').hidden = false; poll(); }
 }).catch(() => {});
+
+// ---------- Rascunho persistente (salvo no servidor: data/draft.json) ----------
+const FORM_IDS = ['message', 'manualNumbers', 'ddi', 'minDelay', 'maxDelay', 'batchSize', 'batchPause', 'windowStart', 'windowEnd'];
+let saveTimer = null;
+const setSaveState = (t) => { $('saveState').textContent = t; };
+
+function collectForm() {
+  const f = {
+    defaults: state.defaults,
+    phoneCol: $('phoneCol').value,
+    windowEnabled: $('windowEnabled').checked,
+    days: [...$('days').querySelectorAll('input:checked')].map((i) => Number(i.value)),
+  };
+  for (const id of FORM_IDS) f[id] = $(id).value;
+  return f;
+}
+
+function scheduleSave() {
+  if (state.restoring) return;
+  setSaveState('Salvando…');
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => saveDraft(false), 800);
+}
+
+async function saveDraft(keepalive) {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  const body = { form: collectForm() };
+  if (state.csvDirty) body.csv = { name: state.csvName || 'contatos.csv', headers: state.headers, rows: state.csvRows };
+  try {
+    const r = await fetch('/api/draft', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      keepalive: keepalive && !body.csv, // keepalive tem limite de 64KB
+    });
+    if (r.status === 401) { location.href = '/login'; return; }
+    if (!r.ok) throw new Error();
+    if (body.csv) state.csvDirty = false;
+    setSaveState('Rascunho salvo ✓');
+  } catch { setSaveState('⚠ Rascunho não salvo'); }
+}
+
+document.addEventListener('input', scheduleSave);
+document.addEventListener('change', scheduleSave);
+window.addEventListener('pagehide', () => { if (saveTimer) saveDraft(true); });
+
+async function restoreDraft() {
+  try {
+    const r = await fetch('/api/draft');
+    if (!r.ok) return;
+    const d = await r.json();
+    state.restoring = true;
+    if (d.csv && Array.isArray(d.csv.headers) && Array.isArray(d.csv.rows)) {
+      loadCsv(d.csv.rows, d.csv.headers, d.csv.name || 'contatos.csv', true);
+    }
+    const f = d.form || {};
+    for (const id of FORM_IDS) if (typeof f[id] === 'string') $(id).value = f[id];
+    if (f.defaults && typeof f.defaults === 'object') state.defaults = f.defaults;
+    if (typeof f.windowEnabled === 'boolean') {
+      $('windowEnabled').checked = f.windowEnabled;
+      $('windowConfig').hidden = !f.windowEnabled;
+    }
+    if (Array.isArray(f.days)) $('days').querySelectorAll('input').forEach((i) => { i.checked = f.days.includes(Number(i.value)); });
+    if (f.phoneCol && state.headers.includes(f.phoneCol)) $('phoneCol').value = f.phoneCol;
+    state.manual = parseManual($('manualNumbers').value);
+    updateManualInfo();
+    renderVars(true);
+    renderPreview();
+    if (d.savedAt) setSaveState('Rascunho restaurado ✓');
+  } catch { /* sem rascunho */ } finally { state.restoring = false; }
+}
+restoreDraft();
+
+$('clearDraft').addEventListener('click', async () => {
+  if (!confirm('Apagar o rascunho salvo (mensagem, CSV, números e campos)?')) return;
+  await fetch('/api/draft', { method: 'DELETE' });
+  for (const k of Object.keys(localStorage)) if (k.startsWith('disp_')) localStorage.removeItem(k);
+  location.reload();
+});

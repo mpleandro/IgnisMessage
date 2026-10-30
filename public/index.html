@@ -4,22 +4,33 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Disparador WhatsApp</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="event-strip">MÉTODO IGNIS <span>✳</span> DISPARADOR WHATSAPP <span>✳</span> HORÁRIO DE BRASÍLIA</div>
+<header class="site-header wrap">
+  <a class="brand" href="/"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="176" height="47"></a>
+  <div class="nav-right"><span id="saveState" class="save-state"></span><a class="header-cta" href="/settings.html">Configurações <span>↗</span></a><button id="clearDraft" type="button" class="nav-btn" title="Apaga mensagem, CSV e campos salvos">Limpar</button><button id="logout" type="button" class="nav-btn">Sair</button></div>
+</header>
 <main>
-  <h1>Disparador WhatsApp <small>N8N / Evolution</small> <a href="/settings.html" class="link" style="float:right;margin-right:10px">⚙ Configurações</a><button id="logout" type="button" style="float:right;font-size:12px;padding:4px 10px;background:none;color:#8b93a3;border:1px solid #2a2f3a;border-radius:6px;cursor:pointer">Sair</button></h1>
+  <div class="hero-title">
+    <h1>Disparador <span class="stroke">WhatsApp</span></h1>
+    <p>Envio em massa via N8N ou Evolution API</p>
+  </div>
 
   <section class="card">
-    <h2>1. Destino</h2>
+    <div class="group-label"><span>1</span>Destino</div>
     <div class="actions">
       <span id="destInfo" class="muted">Carregando…</span>
-      <a href="/settings.html" class="link">Configurações</a>
+      <a href="/settings.html" class="link">Alterar ↗</a>
     </div>
   </section>
 
   <section class="card">
-    <h2>2. Contatos</h2>
+    <div class="group-label"><span>2</span>Contatos</div>
     <input id="csvFile" type="file" accept=".csv,.txt">
     <p id="csvInfo" class="muted">Nenhum arquivo carregado. A primeira linha deve conter os rótulos das colunas.</p>
     <label>Ou digite números manualmente (um por linha, ou separados por vírgula / ponto e vírgula)
@@ -30,17 +41,21 @@
       <label>Coluna do telefone <select id="phoneCol"></select></label>
       <label>DDI padrão (se número sem DDI) <input id="ddi" value="55" inputmode="numeric"></label>
     </div>
+    <div id="csvPreview" hidden>
+      <p class="muted" id="csvPreviewInfo"></p>
+      <div class="tablewrap"><table id="csvTable"></table></div>
+    </div>
   </section>
 
   <section class="card">
-    <h2>3. Mensagem</h2>
+    <div class="group-label"><span>3</span>Mensagem</div>
     <textarea id="message" rows="7" placeholder="Olá {{nome}}, tudo bem? Vi que você é de {{cidade}}..."></textarea>
     <p class="muted">Use <code>{{campo}}</code> com o nome exato de uma coluna do CSV. Campos que não existirem no CSV usarão sempre o valor padrão.</p>
     <div id="vars"></div>
   </section>
 
   <section class="card">
-    <h2>4. Pré-visualização</h2>
+    <div class="group-label"><span>4</span>Pré-visualização</div>
     <div class="row nav">
       <button id="prev" type="button">←</button>
       <span id="previewPos" class="muted">—</span>
@@ -57,7 +72,7 @@
   </section>
 
   <section class="card">
-    <h2>5. Cadência de envio</h2>
+    <div class="group-label"><span>5</span>Cadência de envio</div>
     <div class="row">
       <label>Intervalo mínimo (s) <input id="minDelay" type="number" min="0" value="8"></label>
       <label>Intervalo máximo (s) <input id="maxDelay" type="number" min="0" value="20"></label>
@@ -86,7 +101,7 @@
   </section>
 
   <section class="card" id="progressCard" hidden>
-    <h2>Andamento</h2>
+    <div class="group-label"><span>↗</span>Andamento</div>
     <div class="bar"><div id="barFill"></div></div>
     <p id="progressText"></p>
     <div class="actions">
@@ -97,6 +112,7 @@
     <table id="log"><thead><tr><th>#</th><th>Telefone</th><th>Status</th><th>Detalhe</th></tr></thead><tbody></tbody></table>
   </section>
 </main>
+<footer class="wrap site-footer"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="120" height="32" loading="lazy"><span>MÉTODO IGNIS © 2026</span></footer>
 <script src="/vendor/papaparse.min.js"></script>
 <script src="app.js"></script>
 </body>

@@ -4,11 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Configurações · Disparador</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="event-strip">MÉTODO IGNIS <span>✳</span> DISPARADOR WHATSAPP <span>✳</span> HORÁRIO DE BRASÍLIA</div>
+<header class="site-header wrap">
+  <a class="brand" href="/"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="176" height="47"></a>
+  <div class="nav-right"><a class="header-cta" href="/">← Voltar ao disparador</a></div>
+</header>
 <main>
-  <h1>Configurações <a href="/" class="link">← Voltar ao disparador</a></h1>
+  <div class="hero-title">
+    <h1>Configu<span class="stroke">rações</span></h1>
+    <p>Destino do disparo · N8N e Evolution API</p>
+  </div>
 
   <section class="card">
     <h2>Destino do disparo</h2>
@@ -59,6 +70,7 @@
     <span id="saveResult" class="muted"></span>
   </section>
 </main>
+<footer class="wrap site-footer"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="120" height="32" loading="lazy"><span>MÉTODO IGNIS © 2026</span></footer>
 <script>
 const $ = (id) => document.getElementById(id);
 const modeInputs = [...document.querySelectorAll('input[name=mode]')];
@@ -96,15 +108,45 @@ async function call(path, method, body) {
   return data;
 }
 
-async function save() {
-  const s = await call('/api/settings', 'PUT', {
+function body() {
+  return {
     mode: mode(),
     n8n: { url: $('n8nUrl').value, headerName: $('n8nHeaderName').value, headerValue: $('n8nHeaderValue').value },
     evolution: { baseUrl: $('evoUrl').value, instance: $('evoInstance').value, version: $('evoVersion').value, apiKey: $('evoKey').value },
-  });
+  };
+}
+
+// Salvamento explícito: grava e recarrega os campos (segredos voltam mascarados).
+async function save() {
+  const s = await call('/api/settings', 'PUT', body());
   fill(s);
   return s;
 }
+
+// Salvamento automático enquanto digita: não mexe em campo que está sendo editado.
+let autoTimer = null;
+function scheduleAutosave() {
+  $('saveResult').textContent = 'Salvando…';
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(autosave, 900);
+}
+async function autosave() {
+  autoTimer = null;
+  try {
+    const s = await call('/api/settings', 'PUT', body());
+    for (const [id, masked, label] of [['n8nHeaderValue', s.n8n.headerValueMasked, 'salvo'], ['evoKey', s.evolution.apiKeyMasked, 'salva']]) {
+      $(id).placeholder = masked ? `${masked} (${label} — vazio mantém)` : '';
+      if (document.activeElement !== $(id)) $(id).value = '';
+    }
+    $('saveResult').textContent = s.ready ? '✔ Salvo automaticamente' : '✔ Salvo — falta preencher o destino ativo para poder disparar';
+  } catch (e) { $('saveResult').textContent = '✖ ' + e.message; }
+}
+document.addEventListener('input', scheduleAutosave);
+document.addEventListener('change', scheduleAutosave);
+window.addEventListener('pagehide', () => {
+  if (!autoTimer) return;
+  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body()), keepalive: true });
+});
 
 $('save').addEventListener('click', async () => {
   $('saveResult').textContent = 'Salvando…';
