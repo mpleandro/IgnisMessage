@@ -9,26 +9,81 @@ const APP_PASSWORD = process.env.APP_PASSWORD || '';
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
-// ---------- Autenticação (Basic Auth) ----------
+// ---------- Autenticação (tela de login + cookie de sessão assinado) ----------
+app.set('trust proxy', true);
+const SESSION_SECRET = process.env.SESSION_SECRET ||
+  crypto.createHash('sha256').update('disparador|' + APP_PASSWORD).digest('hex');
+const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
+const COOKIE = 'disp_session';
+
 function safeEqual(a, b) {
   const ha = crypto.createHash('sha256').update(String(a)).digest();
   const hb = crypto.createHash('sha256').update(String(b)).digest();
   return crypto.timingSafeEqual(ha, hb);
 }
+const sign = (v) => crypto.createHmac('sha256', SESSION_SECRET).update(v).digest('base64url');
+function makeToken() {
+  const payload = Buffer.from(JSON.stringify({ u: APP_USER, exp: Date.now() + SESSION_TTL_MS })).toString('base64url');
+  return payload + '.' + sign(payload);
+}
+function validToken(token) {
+  const [payload, sig] = String(token || '').split('.');
+  if (!payload || !sig || !safeEqual(sig, sign(payload))) return false;
+  try {
+    const d = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return d.u === APP_USER && d.exp > Date.now();
+  } catch { return false; }
+}
+function getCookie(req, name) {
+  for (const part of (req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return '';
+}
+const isAuthed = (req) => !APP_PASSWORD || validToken(getCookie(req, COOKIE));
+
+// limite de tentativas por IP: 8 falhas / 10 min
+const attempts = new Map();
+function tooMany(ip) {
+  const a = attempts.get(ip);
+  return a && a.until > Date.now() && a.count >= 8;
+}
+function noteFail(ip) {
+  const a = attempts.get(ip);
+  if (!a || a.until < Date.now()) attempts.set(ip, { count: 1, until: Date.now() + 10 * 60 * 1000 });
+  else a.count++;
+}
+
+app.get('/login', (req, res) => {
+  if (isAuthed(req)) return res.redirect('/');
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+app.post('/api/login', (req, res) => {
+  const ip = req.ip;
+  if (tooMany(ip)) return res.status(429).json({ error: 'Muitas tentativas. Aguarde alguns minutos.' });
+  const { user, password } = req.body || {};
+  if (APP_PASSWORD && safeEqual(user || '', APP_USER) && safeEqual(password || '', APP_PASSWORD)) {
+    attempts.delete(ip);
+    res.cookie(COOKIE, makeToken(), {
+      httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: SESSION_TTL_MS, path: '/',
+    });
+    return res.json({ ok: true });
+  }
+  noteFail(ip);
+  res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+});
+
+app.post('/api/logout', (req, res) => {
+  res.clearCookie(COOKIE, { path: '/' });
+  res.json({ ok: true });
+});
 
 app.use((req, res, next) => {
-  if (!APP_PASSWORD) return next();
-  const header = req.headers.authorization || '';
-  const [scheme, encoded] = header.split(' ');
-  if (scheme === 'Basic' && encoded) {
-    const decoded = Buffer.from(encoded, 'base64').toString();
-    const idx = decoded.indexOf(':');
-    const user = decoded.slice(0, idx);
-    const pass = decoded.slice(idx + 1);
-    if (safeEqual(user, APP_USER) && safeEqual(pass, APP_PASSWORD)) return next();
-  }
-  res.set('WWW-Authenticate', 'Basic realm="Disparador"');
-  res.status(401).send('Autenticação necessária');
+  if (isAuthed(req)) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Não autenticado' });
+  res.redirect('/login');
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -243,5 +298,5 @@ app.post('/api/campaigns/:id/:action', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Disparador rodando na porta ${PORT}`);
-  if (!APP_PASSWORD) console.warn('ATENÇÃO: APP_PASSWORD não definido — a aplicação está sem senha!');
+  if (!APP_PASSWORD) console.warn('ATENÇÃO: APP_PASSWORD não definido — a aplicação está sem login!');
 });

@@ -13,7 +13,7 @@ APP_PASSWORD=minhasenha npm start   # http://localhost:3000
 cp .env.example .env     # defina APP_PASSWORD
 docker compose up -d --build
 ```
-Coloque atrás de HTTPS (Caddy/Nginx/Traefik) — a senha usa Basic Auth e trafega em texto sem TLS.
+Coloque atrás de HTTPS (Caddy/Nginx/Traefik) — a senha usa tela de login (cookie de sessão); use HTTPS.
 Exemplo Caddy: `disparo.seudominio.com { reverse_proxy localhost:3000 }`
 
 ## Payload enviado ao webhook (POST JSON, um por contato)
