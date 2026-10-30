@@ -52,6 +52,13 @@
     <textarea id="message" rows="7" placeholder="Olá {{nome}}, tudo bem? Vi que você é de {{cidade}}..."></textarea>
     <p class="muted">Use <code>{{campo}}</code> com o nome exato de uma coluna do CSV. Campos que não existirem no CSV usarão sempre o valor padrão.</p>
     <div id="vars"></div>
+    <div class="attach">
+      <label>Anexo (opcional): imagem, vídeo ou documento — a mensagem acima vira a legenda
+        <input id="mediaFile" type="file" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip">
+      </label>
+      <p id="mediaInfo" class="muted">Nenhum anexo. Máx. 50 MB.</p>
+      <button id="mediaRemove" type="button" hidden>Remover anexo</button>
+    </div>
   </section>
 
   <section class="card">

@@ -63,8 +63,9 @@ details summary:hover{color:var(--fg)}
 /* botões */
 button{font:inherit;cursor:pointer}
 .actions{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.actions button,.row.nav button,#downloadInvalid{min-height:48px;padding:13px 22px;border:1px solid var(--line);background:transparent;color:var(--fg);font:800 11px/1.3 var(--font);letter-spacing:.035em;text-transform:uppercase;transition:background .25s,border-color .25s,transform .25s}
-.actions button:hover,.row.nav button:hover,#downloadInvalid:hover{border-color:var(--orange)}
+.attach{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}
+.actions button,.row.nav button,#downloadInvalid,#mediaRemove{min-height:48px;padding:13px 22px;border:1px solid var(--line);background:transparent;color:var(--fg);font:800 11px/1.3 var(--font);letter-spacing:.035em;text-transform:uppercase;transition:background .25s,border-color .25s,transform .25s}
+.actions button:hover,.row.nav button:hover,#downloadInvalid:hover,#mediaRemove:hover{border-color:var(--orange)}
 button.primary{border-color:var(--orange);background:var(--orange);color:#080808}
 button.primary:hover{background:#ff8d50;border-color:#ff8d50;transform:translateY(-2px)}
 button.danger{color:var(--danger);border-color:#ff5a4d66}

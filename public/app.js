@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { csvRows: [], manual: [], headers: [], defaults: {}, varKey: '', previewIdx: 0, campaignId: null, timer: null };
+const state = { csvRows: [], manual: [], headers: [], defaults: {}, varKey: '', previewIdx: 0, campaignId: null, timer: null, media: null };
 
 const VAR_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
 const norm = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
@@ -110,6 +110,58 @@ function renderVars(force) {
   }
 }
 
+// ---------- Anexo (imagem / vídeo / documento) ----------
+const MEDIA_MAX = 50 * 1024 * 1024;
+const MEDIA_ICON = { image: '🖼', video: '🎬', document: '📄' };
+const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
+
+function renderMedia() {
+  const m = state.media;
+  $('mediaInfo').textContent = m
+    ? `${MEDIA_ICON[m.type]} ${m.name} · ${fmtSize(m.size)} · ${{ image: 'imagem', video: 'vídeo', document: 'documento' }[m.type]}`
+    : 'Nenhum anexo. Máx. 50 MB.';
+  $('mediaRemove').hidden = !m;
+  renderPreview();
+}
+
+$('mediaFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  if (file.size > MEDIA_MAX) return alert('Arquivo maior que 50 MB.');
+  $('mediaInfo').textContent = 'Enviando arquivo…';
+  try {
+    const res = await fetch('/api/media', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-File-Name': encodeURIComponent(file.name),
+        'X-File-Type': file.type || 'application/octet-stream',
+      },
+      body: file,
+    });
+    if (res.status === 401) { location.href = '/login'; return; }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    const old = state.media;
+    state.media = data;
+    if (old) fetch('/api/media/' + old.id, { method: 'DELETE' });
+    renderMedia();
+    scheduleSave();
+  } catch (err) {
+    alert('Erro ao enviar o arquivo: ' + err.message);
+    renderMedia();
+  }
+});
+
+$('mediaRemove').addEventListener('click', () => {
+  const old = state.media;
+  state.media = null;
+  if (old) fetch('/api/media/' + old.id, { method: 'DELETE' });
+  renderMedia();
+  scheduleSave();
+});
+
 // ---------- Montagem da mensagem ----------
 // Retorna { phone } quando válido ou { error } com o motivo.
 function checkPhone(raw) {
@@ -202,7 +254,7 @@ function renderPreview() {
   renderVars(false);
   const rows = allRows();
   const n = rows.length;
-  if (!n || !$('message').value.trim()) {
+  if (!n || (!$('message').value.trim() && !state.media)) {
     $('preview').textContent = 'Carregue o CSV ou digite números, e escreva a mensagem.';
     $('previewPos').textContent = '—';
     $('previewPhone').textContent = '';
@@ -214,7 +266,8 @@ function renderPreview() {
   const item = buildItem(rows[state.previewIdx].row);
   $('previewPos').textContent = `Contato ${state.previewIdx + 1} de ${n}`;
   $('previewPhone').textContent = item.phone ? `Para: +${item.phone}` : `⚠ ${item.error}`;
-  $('preview').textContent = item.message;
+  const m = state.media;
+  $('preview').textContent = (m ? `${MEDIA_ICON[m.type]} ${m.name}\n` : '') + item.message;
 
   const { valid, invalid, emptyFields } = analyze();
   state.invalid = invalid;
@@ -313,7 +366,7 @@ $('testBtn').addEventListener('click', async () => {
   if (!items.length) return alert('Nenhum contato válido.');
   $('testResult').textContent = 'Enviando…';
   try {
-    const r = await api('/api/test', { ...config(), item: items[0] });
+    const r = await api('/api/test', { ...config(), item: items[0], mediaId: state.media && state.media.id });
     $('testResult').textContent = r.ok ? `✔ Destino respondeu ${r.status}` : `✖ Falhou (${r.status}): ${r.body}`;
   } catch (e) { $('testResult').textContent = '✖ ' + e.message; }
 });
@@ -322,9 +375,10 @@ $('startBtn').addEventListener('click', async () => {
   if (state.destReady === false) return alert('Configure o destino (N8N ou Evolution) em Configurações.');
   const items = validItems();
   if (!items.length) return alert('Nenhum contato válido.');
+  if (!$('message').value.trim() && !state.media) return alert('Escreva a mensagem ou anexe um arquivo.');
   if (!confirm(`Disparar ${items.length} mensagens agora?`)) return;
   try {
-    const c = await api('/api/campaigns', { ...config(), items });
+    const c = await api('/api/campaigns', { ...config(), items, mediaId: state.media && state.media.id });
     state.campaignId = c.id;
     $('progressCard').hidden = false;
     poll();
@@ -381,6 +435,7 @@ function collectForm() {
   const f = {
     defaults: state.defaults,
     phoneCol: $('phoneCol').value,
+    media: state.media,
     windowEnabled: $('windowEnabled').checked,
     days: [...$('days').querySelectorAll('input:checked')].map((i) => Number(i.value)),
   };
@@ -429,6 +484,7 @@ async function restoreDraft() {
     }
     const f = d.form || {};
     for (const id of FORM_IDS) if (typeof f[id] === 'string') $(id).value = f[id];
+    if (f.media && typeof f.media.id === 'string') { state.media = f.media; renderMedia(); }
     if (f.defaults && typeof f.defaults === 'object') state.defaults = f.defaults;
     if (typeof f.windowEnabled === 'boolean') {
       $('windowEnabled').checked = f.windowEnabled;
@@ -447,6 +503,7 @@ restoreDraft();
 
 $('clearDraft').addEventListener('click', async () => {
   if (!confirm('Apagar o rascunho salvo (mensagem, CSV, números e campos)?')) return;
+  if (state.media) await fetch('/api/media/' + state.media.id, { method: 'DELETE' });
   await fetch('/api/draft', { method: 'DELETE' });
   for (const k of Object.keys(localStorage)) if (k.startsWith('disp_')) localStorage.removeItem(k);
   location.reload();
