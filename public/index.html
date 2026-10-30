@@ -19,9 +19,13 @@
   </section>
 
   <section class="card">
-    <h2>2. Base de contatos (CSV)</h2>
+    <h2>2. Contatos</h2>
     <input id="csvFile" type="file" accept=".csv,.txt">
     <p id="csvInfo" class="muted">Nenhum arquivo carregado. A primeira linha deve conter os rótulos das colunas.</p>
+    <label>Ou digite números manualmente (um por linha, ou separados por vírgula / ponto e vírgula)
+      <textarea id="manualNumbers" rows="4" placeholder="(11) 99999-8888&#10;21988887777, 31977776666"></textarea>
+    </label>
+    <p id="manualInfo" class="muted">Os números digitados são somados aos do CSV (se houver). Campos {{variável}} usam o valor padrão nesses contatos.</p>
     <div id="phoneConfig" class="row" hidden>
       <label>Coluna do telefone <select id="phoneCol"></select></label>
       <label>DDI padrão (se número sem DDI) <input id="ddi" value="55" inputmode="numeric"></label>
@@ -48,7 +52,7 @@
     <details id="invalidBox" hidden>
       <summary id="invalidSummary"></summary>
       <button id="downloadInvalid" type="button">Baixar CSV dos inválidos</button>
-      <table id="invalidTable"><thead><tr><th>Linha</th><th>Valor</th><th>Erro</th></tr></thead><tbody></tbody></table>
+      <table id="invalidTable"><thead><tr><th>Origem</th><th>Valor</th><th>Erro</th></tr></thead><tbody></tbody></table>
     </details>
   </section>
 

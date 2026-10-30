@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { rows: [], headers: [], defaults: {}, varKey: '', previewIdx: 0, campaignId: null, timer: null };
+const state = { csvRows: [], manual: [], headers: [], defaults: {}, varKey: '', previewIdx: 0, campaignId: null, timer: null };
 
 const VAR_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
 const norm = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
@@ -20,9 +20,9 @@ $('csvFile').addEventListener('change', (e) => {
     skipEmptyLines: 'greedy',
     transformHeader: (h) => h.trim(),
     complete: (res) => {
-      state.rows = res.data;
+      state.csvRows = res.data;
       state.headers = res.meta.fields || [];
-      $('csvInfo').textContent = `${state.rows.length} linhas · colunas: ${state.headers.join(', ')}`;
+      $('csvInfo').textContent = `${state.csvRows.length} linhas · colunas: ${state.headers.join(', ')}`;
       $('phoneCol').innerHTML = state.headers.map((h) => `<option>${esc(h)}</option>`).join('');
       const guess = state.headers.find((h) => /(whats|telefone|celular|phone|fone|numero|número)/i.test(h));
       if (guess) $('phoneCol').value = guess;
@@ -115,24 +115,47 @@ function buildItem(row) {
     if (!def) missing.push(name);
     return def;
   });
-  const { phone, error } = checkPhone(row[$('phoneCol').value]);
+  const { phone, error } = checkPhone(row[phoneKey()]);
   return { phone, error, message, fields: row, missing };
 }
+
+// Coluna que guarda o telefone (no modo só-manual não há CSV, então usa 'telefone').
+const phoneKey = () => $('phoneCol').value || 'telefone';
+
+// CSV + números digitados, cada um com sua origem (para mensagens de erro).
+function allRows() {
+  const key = phoneKey();
+  const out = state.csvRows.map((row, i) => ({ row, origin: `linha ${i + 2}` })); // linha 1 é o cabeçalho
+  state.manual.forEach((n, i) => out.push({ row: { [key]: n }, origin: `manual ${i + 1}` }));
+  return out;
+}
+
+function parseManual(text) {
+  return text.split(/[\n,;\t]+/).map((t) => t.trim()).filter(Boolean);
+}
+
+$('manualNumbers').addEventListener('input', () => {
+  state.manual = parseManual($('manualNumbers').value);
+  state.previewIdx = 0;
+  $('manualInfo').textContent = state.manual.length
+    ? `${state.manual.length} número(s) digitado(s), somados ao CSV (se houver). Campos {{variável}} usam o valor padrão nesses contatos.`
+    : 'Os números digitados são somados aos do CSV (se houver). Campos {{variável}} usam o valor padrão nesses contatos.';
+  renderPreview();
+});
 
 // Classifica todas as linhas em válidas/inválidas (inclui detecção de duplicados).
 function analyze() {
   const valid = [], invalid = [];
   const seen = new Map();
   let emptyFields = 0;
-  state.rows.forEach((row, i) => {
-    const line = i + 2; // linha 1 é o cabeçalho
+  allRows().forEach(({ row, origin }) => {
     const it = buildItem(row);
     let error = it.error;
     if (!error) {
-      if (seen.has(it.phone)) error = `Duplicado (mesmo número da linha ${seen.get(it.phone)})`;
-      else seen.set(it.phone, line);
+      if (seen.has(it.phone)) error = `Duplicado (mesmo número de ${seen.get(it.phone)})`;
+      else seen.set(it.phone, origin);
     }
-    if (error) invalid.push({ line, raw: row[$('phoneCol').value] ?? '', error, row });
+    if (error) invalid.push({ line: origin, raw: row[phoneKey()] ?? '', error, row });
     else { valid.push(it); if (it.missing.length) emptyFields++; }
   });
   return { valid, invalid, emptyFields };
@@ -140,9 +163,10 @@ function analyze() {
 
 function renderPreview() {
   renderVars(false);
-  const n = state.rows.length;
+  const rows = allRows();
+  const n = rows.length;
   if (!n || !$('message').value.trim()) {
-    $('preview').textContent = 'Carregue o CSV e escreva a mensagem.';
+    $('preview').textContent = 'Carregue o CSV ou digite números, e escreva a mensagem.';
     $('previewPos').textContent = '—';
     $('previewPhone').textContent = '';
     $('stats').textContent = '';
@@ -150,7 +174,7 @@ function renderPreview() {
     return;
   }
   state.previewIdx = Math.min(Math.max(state.previewIdx, 0), n - 1);
-  const item = buildItem(state.rows[state.previewIdx]);
+  const item = buildItem(rows[state.previewIdx].row);
   $('previewPos').textContent = `Contato ${state.previewIdx + 1} de ${n}`;
   $('previewPhone').textContent = item.phone ? `Para: +${item.phone}` : `⚠ ${item.error}`;
   $('preview').textContent = item.message;
@@ -168,8 +192,9 @@ function renderPreview() {
 }
 
 $('downloadInvalid').addEventListener('click', () => {
-  const rows = (state.invalid || []).map((r) => ({ linha_csv: r.line, ...r.row, erro_telefone: r.error }));
-  const blob = new Blob(['﻿' + Papa.unparse(rows)], { type: 'text/csv;charset=utf-8' });
+  const rows = (state.invalid || []).map((r) => ({ origem: r.line, ...r.row, erro_telefone: r.error }));
+  const fields = ['origem', ...new Set([...state.headers, phoneKey()]), 'erro_telefone'];
+  const blob = new Blob(['﻿' + Papa.unparse({ fields, data: rows })], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'telefones_invalidos.csv';
