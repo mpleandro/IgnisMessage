@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const express = require('express');
 
@@ -56,6 +57,9 @@ function noteFail(ip) {
   else a.count++;
 }
 
+// Assets visuais (logo) são públicos para a tela de login poder usá-los.
+app.use('/assets', express.static(path.join(__dirname, 'public', 'assets')));
+
 app.get('/login', (req, res) => {
   if (isAuthed(req)) return res.redirect('/');
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
@@ -98,8 +102,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (min, max) => min + Math.random() * (max - min);
 
 // ---------- Configurações (N8N / Evolution), salvas em disco ----------
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+// Fora da pasta do projeto, para não se perder ao substituir/atualizar o código. No Docker: DATA_DIR=/app/data (volume).
+const DATA_DIR = process.env.DATA_DIR || path.join(os.homedir(), '.disparador');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+
+// Migração: versões antigas guardavam tudo em ./data dentro do projeto.
+(function migrateLegacyData() {
+  const legacy = path.join(__dirname, 'data');
+  if (legacy === DATA_DIR || fs.existsSync(SETTINGS_FILE) || !fs.existsSync(path.join(legacy, 'settings.json'))) return;
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    for (const f of ['settings.json', 'draft.json']) {
+      if (fs.existsSync(path.join(legacy, f))) fs.copyFileSync(path.join(legacy, f), path.join(DATA_DIR, f));
+    }
+    console.log('Dados antigos migrados de', legacy, 'para', DATA_DIR);
+  } catch (e) { console.warn('Falha ao migrar dados antigos:', e.message); }
+})();
 const DEFAULT_SETTINGS = {
   mode: 'n8n', // 'n8n' = o N8N envia | 'evolution' = o servidor chama a Evolution API direto
   n8n: { url: '', headerName: '', headerValue: '' },
@@ -181,11 +199,43 @@ app.put('/api/settings', (req, res) => {
     next.evolution.version = b.evolution.version === 'v1' ? 'v1' : 'v2';
     if (typeof b.evolution.apiKey === 'string' && b.evolution.apiKey.trim()) next.evolution.apiKey = b.evolution.apiKey.trim(); // vazio = mantém
   }
-  const err = destError(next);
-  if (err) return res.status(400).json({ error: err.replace(' em Configurações', '') });
   try { persistSettings(next); } catch (e) { return res.status(500).json({ error: 'Não foi possível salvar: ' + e.message }); }
   settings = next;
   res.json(publicSettings(settings));
+});
+
+// ---------- Rascunho do formulário (mensagem, CSV, cadência...), salvo em disco ----------
+const DRAFT_FILE = path.join(DATA_DIR, 'draft.json');
+
+function readDraft() {
+  try { return JSON.parse(fs.readFileSync(DRAFT_FILE, 'utf8')); } catch { return {}; }
+}
+function writeDraft(d) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = DRAFT_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(d), { mode: 0o600 });
+  fs.renameSync(tmp, DRAFT_FILE);
+}
+const validCsv = (c) => c && typeof c.name === 'string' && Array.isArray(c.headers) && Array.isArray(c.rows);
+
+app.get('/api/draft', (req, res) => res.json(readDraft()));
+
+app.put('/api/draft', (req, res) => {
+  const cur = readDraft();
+  const b = req.body || {};
+  const next = {
+    form: b.form && typeof b.form === 'object' ? b.form : cur.form,
+    // csv ausente = mantém o que já está salvo; null = remove
+    csv: b.csv === undefined ? cur.csv : (validCsv(b.csv) ? b.csv : undefined),
+    savedAt: Date.now(),
+  };
+  try { writeDraft(next); } catch (e) { return res.status(500).json({ error: 'Não foi possível salvar: ' + e.message }); }
+  res.json({ ok: true, savedAt: next.savedAt });
+});
+
+app.delete('/api/draft', (req, res) => {
+  try { fs.rmSync(DRAFT_FILE, { force: true }); } catch {}
+  res.json({ ok: true });
 });
 
 // ---------- Envio ----------
@@ -400,5 +450,6 @@ app.post('/api/campaigns/:id/:action', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Disparador rodando na porta ${PORT}`);
+  console.log('Dados persistidos em', DATA_DIR);
   if (!APP_PASSWORD) console.warn('ATENÇÃO: APP_PASSWORD não definido — a aplicação está sem login!');
 });

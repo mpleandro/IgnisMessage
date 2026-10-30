@@ -21,7 +21,13 @@ Em `/settings.html` você escolhe o destino do disparo e informa as credenciais:
 - **N8N** — URL do webhook (+ header de autenticação opcional). O servidor envia um POST por contato.
 - **Evolution API direto** (opcional) — URL, nome da instância, API Key e versão (v1/v2). O servidor chama `POST /message/sendText/{instancia}` sem passar pelo N8N. "Salvar e testar conexão" só consulta o estado da instância.
 
-As configurações ficam em `data/settings.json` (permissão 600, volume `disparador-data` no Docker), então sobrevivem a reinícios. Chaves e valores de header nunca voltam para o navegador (aparecem mascaradas); deixar o campo em branco mantém o valor salvo.
+## Persistência
+Tudo é gravado automaticamente enquanto você digita — não precisa clicar em salvar:
+- `settings.json` — destino (N8N/Evolution), URL do webhook, chaves.
+- `draft.json` — rascunho do disparo: mensagem, valores padrão, números digitados, cadência, janela e o CSV carregado.
+
+Local dos arquivos: `~/.disparador/` ao rodar direto com Node (fora da pasta do projeto, então substituir o código não apaga nada); `/app/data` no Docker, no volume `disparador-data`. Evite `docker compose down -v`, que apaga o volume. O botão **Limpar** no topo apaga só o rascunho do disparo, não as configurações.
+ Chaves e valores de header nunca voltam para o navegador (aparecem mascaradas); deixar o campo em branco mantém o valor salvo.
 
 ## Payload enviado ao webhook (modo N8N) (POST JSON, um por contato)
 ```json
