@@ -107,6 +107,7 @@ app.use('/vendor/papaparse.min.js', (req, res) =>
 
 // ---------- Fila de disparos ----------
 const campaigns = new Map();
+const ACTIVE = ['scheduled', 'running', 'paused'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (min, max) => min + Math.random() * (max - min);
 
@@ -130,7 +131,8 @@ function readMediaMeta(id) {
 function deleteMedia(id) {
   if (!MEDIA_ID_RE.test(String(id))) return;
   for (const c of campaigns.values()) {
-    if (c.media && c.media.id === id && ['running', 'paused'].includes(c.status)) return; // ainda em uso
+    if (!ACTIVE.includes(c.status)) continue;
+    if ((c.steps || []).some((s) => s.media && s.media.id === id)) return; // ainda em uso por campanha ativa/agendada
   }
   fs.rmSync(mediaPath(id), { force: true });
   fs.rmSync(mediaPath(id) + '.json', { force: true });
@@ -321,7 +323,7 @@ async function http(url, { method = 'POST', headers = {}, body } = {}) {
 
 const evoUrl = (e, route) => `${e.baseUrl.replace(/\/+$/, '')}${route}/${encodeURIComponent(e.instance)}`;
 
-// Entrega uma mensagem pelo destino configurado (N8N ou Evolution direto).
+// Entrega UMA mensagem (um passo da sequência) pelo destino configurado (N8N ou Evolution direto).
 function deliver(dest, item, meta, media) {
   if (dest.mode === 'evolution') {
     const e = dest.evolution;
@@ -377,43 +379,158 @@ function inWindow(cfg) {
   return start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
 }
 
+// ---------- Persistência das campanhas (agendadas, em andamento e histórico) ----------
+// Gravadas em disco para que agendamentos e disparos em andamento sobrevivam a reinícios do servidor.
+const CAMPAIGNS_FILE = path.join(DATA_DIR, 'campaigns.json');
+const MAX_FINISHED = 50;
+let campaignsSaveTimer = null;
+
+function saveCampaignsSoon() {
+  if (campaignsSaveTimer) return;
+  campaignsSaveTimer = setTimeout(saveCampaignsNow, 1000);
+}
+
+function saveCampaignsNow() {
+  clearTimeout(campaignsSaveTimer);
+  campaignsSaveTimer = null;
+  // mantém todas as ativas + as últimas MAX_FINISHED encerradas
+  const finished = [...campaigns.values()].filter((c) => !ACTIVE.includes(c.status)).sort((a, b) => b.createdAt - a.createdAt);
+  for (const c of finished.slice(MAX_FINISHED)) campaigns.delete(c.id);
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = CAMPAIGNS_FILE + '.tmp';
+    const list = [...campaigns.values()].map(({ nextAt, waitingWindow, ...rest }) => rest);
+    fs.writeFileSync(tmp, JSON.stringify(list), { mode: 0o600 }); // contém snapshot das credenciais do destino
+    fs.renameSync(tmp, CAMPAIGNS_FILE);
+  } catch (e) { console.warn('Falha ao salvar campanhas:', e.message); }
+}
+
+function launch(c) {
+  runCampaign(c).catch((e) => {
+    c.status = 'error';
+    c.log.push({ index: c.cursor + 1, ok: false, status: 0, info: e.message, at: Date.now() });
+    saveCampaignsNow();
+  });
+}
+
+function loadCampaigns() {
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(CAMPAIGNS_FILE, 'utf8')); } catch { return; }
+  if (!Array.isArray(list)) return;
+  let resumed = 0;
+  for (const c of list) {
+    if (!c || !c.id || !Array.isArray(c.items) || !Array.isArray(c.steps)) continue;
+    c.nextAt = null;
+    c.waitingWindow = false;
+    campaigns.set(c.id, c);
+    if (ACTIVE.includes(c.status)) { launch(c); resumed++; }
+  }
+  if (resumed) console.log(`${resumed} campanha(s) agendada(s)/em andamento retomada(s).`);
+}
+
+// ---------- Execução ----------
+// Cada contato recebe a sequência de mensagens (steps) em ordem, com uma espera aleatória antes de cada
+// mensagem a partir da 2ª. Entre um contato e outro vale a cadência geral (intervalo + pausa por lote).
+async function waitWhilePaused(c) {
+  while (c.status === 'paused') await sleep(500);
+  return c.status === 'running';
+}
+
+// Próximo passo (a partir de j) com conteúdo para este contato; -1 se não houver.
+function nextStep(c, msgs, j) {
+  for (; j < c.steps.length; j++) if (String(msgs[j] ?? '').trim() || c.steps[j].media) return j;
+  return -1;
+}
+
 async function runCampaign(c) {
   const { cfg } = c;
-  let sinceBatch = 0;
+
+  // Agendamento: aguarda o horário de início (status 'scheduled').
+  while (c.status === 'scheduled' && Date.now() < c.startAt) {
+    c.nextAt = c.startAt;
+    await sleep(Math.min(1000, Math.max(50, c.startAt - Date.now())));
+  }
+  c.nextAt = null;
+  if (c.status === 'scheduled') {
+    c.status = 'running';
+    c.startedAt = Date.now();
+    saveCampaignsSoon();
+  }
+
   while (c.cursor < c.items.length) {
-    while (c.status === 'paused') await sleep(500);
-    if (c.status === 'canceled') return;
-    while (!inWindow(cfg) && c.status !== 'canceled') {
-      c.waitingWindow = true;
-      await sleep(1000);
+    if (!(await waitWhilePaused(c))) return;
+    // A janela de horário só é checada antes de começar um contato — uma sequência iniciada vai até o fim.
+    if (!c.step) {
+      while (!inWindow(cfg) && ACTIVE.includes(c.status)) {
+        c.waitingWindow = true;
+        await sleep(1000);
+      }
+      c.waitingWindow = false;
+      if (c.status === 'paused') continue;
+      if (c.status !== 'running') return;
     }
-    c.waitingWindow = false;
-    if (c.status === 'canceled') return;
-    if (c.status === 'paused') continue;
 
     const i = c.cursor;
     const item = c.items[i];
-    const result = await deliver(cfg.dest, item, { campaign_id: c.id, index: i + 1, total: c.items.length }, c.media);
-    c.cursor++;
-    if (result.ok) c.sent++;
-    else c.failed++;
-    c.log.push({ index: i + 1, phone: item.phone, ok: result.ok, status: result.status, info: result.ok ? '' : result.body, at: Date.now() });
-    if (c.log.length > 500) c.log.shift();
+    const msgs = item.messages;
+    let ok = true;
+    let delivered = 0;
+    let j = nextStep(c, msgs, c.step || 0);
+    while (j >= 0) {
+      if (!(await waitWhilePaused(c))) return;
+      c.step = j;
+      const st = c.steps[j];
+      const result = await deliver(
+        cfg.dest,
+        { phone: item.phone, message: String(msgs[j] ?? ''), fields: item.fields },
+        { campaign_id: c.id, index: i + 1, total: c.items.length, step: j + 1, steps: c.steps.length },
+        st.media
+      );
+      c.log.push({ index: i + 1, step: j + 1, phone: item.phone, ok: result.ok, status: result.status, info: result.ok ? '' : result.body, at: Date.now() });
+      if (c.log.length > 500) c.log.shift();
+      c.step = j + 1;
+      saveCampaignsSoon();
+      if (!result.ok) { ok = false; break; } // não manda o resto da sequência se uma mensagem falhar
+      delivered++;
+      c.messagesSent = (c.messagesSent || 0) + 1;
 
-    if (c.cursor >= c.items.length) break;
-    sinceBatch++;
-    if (cfg.batchSize > 0 && sinceBatch >= cfg.batchSize) {
-      sinceBatch = 0;
-      c.nextAt = Date.now() + cfg.batchPause * 1000;
-      await sleepInterruptible(c, cfg.batchPause * 1000);
-    } else {
-      const wait = rand(cfg.minDelay, cfg.maxDelay) * 1000;
+      j = nextStep(c, msgs, j + 1);
+      if (j < 0) break;
+      const wait = rand(c.steps[j].delayMin, c.steps[j].delayMax) * 1000;
       c.nextAt = Date.now() + wait;
       await sleepInterruptible(c, wait);
+      c.nextAt = null;
+      if (c.status === 'canceled') return;
     }
+    if (ok && !delivered && c.step === 0) {
+      ok = false;
+      c.log.push({ index: i + 1, phone: item.phone, ok: false, status: 0, info: 'todas as mensagens ficaram vazias para este contato', at: Date.now() });
+    }
+
+    c.cursor++;
+    c.step = 0;
+    if (ok) c.sent++;
+    else c.failed++;
+    saveCampaignsSoon();
+
+    if (c.cursor >= c.items.length) break;
+    c.sinceBatch = (c.sinceBatch || 0) + 1;
+    let wait;
+    if (cfg.batchSize > 0 && c.sinceBatch >= cfg.batchSize) {
+      c.sinceBatch = 0;
+      wait = cfg.batchPause * 1000;
+    } else {
+      wait = rand(cfg.minDelay, cfg.maxDelay) * 1000;
+    }
+    c.nextAt = Date.now() + wait;
+    await sleepInterruptible(c, wait);
     c.nextAt = null;
   }
-  if (c.status === 'running') c.status = 'done';
+  if (c.status === 'running') {
+    c.status = 'done';
+    c.finishedAt = Date.now();
+  }
+  saveCampaignsNow();
 }
 
 async function sleepInterruptible(c, ms) {
@@ -422,27 +539,89 @@ async function sleepInterruptible(c, ms) {
 }
 
 function summary(c, withLog) {
+  const first = c.items[0];
   const out = {
     id: c.id,
     status: c.status,
     total: c.items.length,
     sent: c.sent,
     failed: c.failed,
+    messagesSent: c.messagesSent || 0,
+    steps: c.steps.length,
     createdAt: c.createdAt,
+    startAt: c.startAt || null,
+    startedAt: c.startedAt || null,
+    finishedAt: c.finishedAt || null,
     nextAt: c.nextAt,
     waitingWindow: !!c.waitingWindow,
+    preview: first ? String(first.messages.find((m) => String(m).trim()) || '').slice(0, 80) : '',
   };
   if (withLog) out.log = c.log.slice(-100);
   return out;
 }
 
+// ---------- Validação do que vem do front ----------
+const MAX_STEPS = 20;
+
+// Passos da sequência: [{ mediaId, delayMin, delayMax }]. Formato antigo (sem steps) = 1 passo com body.mediaId.
+function parseSteps(req, body) {
+  const raw = Array.isArray(body.steps) && body.steps.length ? body.steps : [{ mediaId: body.mediaId }];
+  if (raw.length > MAX_STEPS) return { error: `No máximo ${MAX_STEPS} mensagens por sequência` };
+  const steps = [];
+  for (let j = 0; j < raw.length; j++) {
+    const s = raw[j] || {};
+    const media = resolveMedia(req, s.mediaId);
+    if (media === undefined) return { error: `Anexo da mensagem ${j + 1} não encontrado. Anexe novamente.` };
+    const delayMin = j ? Math.max(0, Number(s.delayMin) || 0) : 0;
+    const delayMax = j ? Math.max(delayMin, Number(s.delayMax) || delayMin) : 0;
+    steps.push({ media, delayMin, delayMax });
+  }
+  return { steps };
+}
+
+// Contatos: [{ phone, messages: [texto do passo 1, passo 2, ...], fields }]. Formato antigo: { message }.
+function parseItems(rawItems, nSteps) {
+  if (!Array.isArray(rawItems)) return [];
+  return rawItems
+    .filter((it) => it && typeof it.phone === 'string' && it.phone)
+    .map((it) => {
+      const msgs = Array.isArray(it.messages) ? it.messages : [it.message];
+      return {
+        phone: it.phone,
+        messages: Array.from({ length: nSteps }, (_, j) => (typeof msgs[j] === 'string' ? msgs[j] : '')),
+        fields: it.fields && typeof it.fields === 'object' ? it.fields : {},
+      };
+    });
+}
+
+// "2026-11-13T09:00" interpretado no horário de Brasília (sem horário de verão desde 2019: UTC-3).
+function parseBrasilia(local) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(local || ''))) return NaN;
+  return new Date(local + ':00-03:00').getTime();
+}
+
+// Envia a sequência inteira para 1 contato. As esperas entre mensagens ficam limitadas a 10s no teste.
 app.post('/api/test', async (req, res) => {
   const err = destError(settings);
   if (err) return res.status(400).json({ error: err });
-  const item = req.body.item || {};
-  const media = resolveMedia(req, req.body.mediaId);
-  if (media === undefined) return res.status(400).json({ error: 'Arquivo anexado não encontrado. Anexe novamente.' });
-  res.json(await deliver(settings, item, { campaign_id: 'teste', index: 1, total: 1 }, media));
+  const parsed = parseSteps(req, req.body || {});
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const { steps } = parsed;
+  const [item] = parseItems([req.body.item], steps.length);
+  if (!item) return res.status(400).json({ error: 'Contato de teste inválido' });
+  const fake = { steps };
+  const results = [];
+  let j = nextStep(fake, item.messages, 0);
+  while (j >= 0) {
+    const r = await deliver(settings, { phone: item.phone, message: item.messages[j], fields: item.fields },
+      { campaign_id: 'teste', index: 1, total: 1, step: j + 1, steps: steps.length }, steps[j].media);
+    results.push({ step: j + 1, ...r });
+    if (!r.ok) break;
+    j = nextStep(fake, item.messages, j + 1);
+    if (j >= 0) await sleep(Math.min(10, steps[j].delayMin) * 1000);
+  }
+  const failed = results.find((r) => !r.ok);
+  res.json({ ok: !failed && results.length > 0, results, ...(failed ? { status: failed.status, body: failed.body } : {}) });
 });
 
 // Teste de conexão do destino salvo. Evolution: consulta o estado da instância (não envia nada).
@@ -468,42 +647,53 @@ app.post('/api/settings/test', async (req, res) => {
 app.post('/api/campaigns', (req, res) => {
   const err = destError(settings);
   if (err) return res.status(400).json({ error: err });
-  const items = Array.isArray(req.body.items) ? req.body.items : [];
+  const b = req.body || {};
+  const parsed = parseSteps(req, b);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const { steps } = parsed;
+  const items = parseItems(b.items, steps.length);
   if (!items.length) return res.status(400).json({ error: 'Nenhum contato para enviar' });
 
-  const media = resolveMedia(req, req.body.mediaId);
-  if (media === undefined) return res.status(400).json({ error: 'Arquivo anexado não encontrado. Anexe novamente.' });
+  let startAt = null;
+  if (b.scheduleAt) {
+    startAt = parseBrasilia(b.scheduleAt);
+    if (!Number.isFinite(startAt)) return res.status(400).json({ error: 'Data/hora de agendamento inválida' });
+    if (startAt < Date.now() - 60000) return res.status(400).json({ error: 'A data/hora de agendamento já passou' });
+  }
 
-  const minDelay = Math.max(0, Number(req.body.minDelay) || 0);
-  const maxDelay = Math.max(minDelay, Number(req.body.maxDelay) || minDelay);
+  const minDelay = Math.max(0, Number(b.minDelay) || 0);
+  const maxDelay = Math.max(minDelay, Number(b.maxDelay) || minDelay);
   const c = {
     id: crypto.randomUUID(),
-    status: 'running',
+    status: startAt ? 'scheduled' : 'running',
+    startAt,
+    startedAt: startAt ? null : Date.now(),
     items,
-    media,
+    steps,
     cursor: 0,
+    step: 0,
+    sinceBatch: 0,
     sent: 0,
     failed: 0,
+    messagesSent: 0,
     log: [],
     nextAt: null,
     createdAt: Date.now(),
     cfg: {
-      dest: structuredClone(settings), // snapshot: mudar as configurações não afeta campanhas em andamento
+      dest: structuredClone(settings), // snapshot: mudar as configurações não afeta campanhas em andamento/agendadas
       minDelay,
       maxDelay,
-      batchSize: Math.max(0, parseInt(req.body.batchSize, 10) || 0),
-      batchPause: Math.max(0, Number(req.body.batchPause) || 0),
-      windowEnabled: !!req.body.windowEnabled,
-      windowStart: /^\d{1,2}:\d{2}$/.test(req.body.windowStart) ? req.body.windowStart : '09:00',
-      windowEnd: /^\d{1,2}:\d{2}$/.test(req.body.windowEnd) ? req.body.windowEnd : '18:00',
-      days: (Array.isArray(req.body.days) ? req.body.days : []).map(Number).filter((d) => d >= 0 && d <= 6),
+      batchSize: Math.max(0, parseInt(b.batchSize, 10) || 0),
+      batchPause: Math.max(0, Number(b.batchPause) || 0),
+      windowEnabled: !!b.windowEnabled,
+      windowStart: /^\d{1,2}:\d{2}$/.test(b.windowStart) ? b.windowStart : '09:00',
+      windowEnd: /^\d{1,2}:\d{2}$/.test(b.windowEnd) ? b.windowEnd : '18:00',
+      days: (Array.isArray(b.days) ? b.days : []).map(Number).filter((d) => d >= 0 && d <= 6),
     },
   };
   campaigns.set(c.id, c);
-  runCampaign(c).catch((e) => {
-    c.status = 'error';
-    c.log.push({ index: c.cursor, ok: false, status: 0, info: e.message, at: Date.now() });
-  });
+  saveCampaignsNow();
+  launch(c);
   res.status(201).json(summary(c));
 });
 
@@ -523,9 +713,18 @@ app.post('/api/campaigns/:id/:action', (req, res) => {
   const { action } = req.params;
   if (action === 'pause' && c.status === 'running') c.status = 'paused';
   else if (action === 'resume' && c.status === 'paused') c.status = 'running';
-  else if (action === 'cancel' && ['running', 'paused'].includes(c.status)) c.status = 'canceled';
+  else if (action === 'start' && c.status === 'scheduled') c.startAt = Date.now(); // iniciar agora
+  else if (action === 'cancel' && ACTIVE.includes(c.status)) { c.status = 'canceled'; c.finishedAt = Date.now(); }
+  else if (action === 'remove' && !ACTIVE.includes(c.status)) {
+    campaigns.delete(c.id);
+    saveCampaignsNow();
+    return res.json({ ok: true, removed: true });
+  }
+  saveCampaignsNow();
   res.json(summary(c));
 });
+
+loadCampaigns();
 
 app.listen(PORT, () => {
   console.log(`Disparador rodando na porta ${PORT}`);

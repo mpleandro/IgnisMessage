@@ -24,17 +24,31 @@ Em `/settings.html` você escolhe o destino do disparo e informa as credenciais:
 ## Persistência
 Tudo é gravado automaticamente enquanto você digita — não precisa clicar em salvar:
 - `settings.json` — destino (N8N/Evolution), URL do webhook, chaves.
-- `draft.json` — rascunho do disparo: mensagem, valores padrão, números digitados, cadência, janela e o CSV carregado.
+- `draft.json` — rascunho do disparo: sequência de mensagens, valores padrão, números digitados, cadência, janela, agendamento e o CSV carregado.
+- `campaigns.json` — campanhas agendadas, em andamento e as últimas 50 encerradas. Ao reiniciar o servidor, as agendadas e as em andamento continuam de onde pararam.
+
+## Sequência de mensagens
+Na etapa **Mensagens** cada contato recebe uma sequência, como numa conversa (“Oi, bom dia!” … “Como vai?”). Até 20 mensagens, cada uma com texto, `{{variáveis}}` e anexo próprios. A partir da 2ª, defina quanto tempo esperar antes dela (aleatório entre mínimo e máximo, em segundos).
+- Mensagens vazias são puladas (também quando uma `{{variável}}` fica vazia para aquele contato).
+- Se uma mensagem falhar, o resto da sequência daquele contato não é enviado; o contato conta como falha.
+- A cadência geral (intervalo e pausa a cada N) vale **entre contatos**, depois que a sequência do contato termina.
+- A janela de horário é checada antes de começar cada contato; uma sequência iniciada vai até o fim.
+- O botão de teste envia a sequência inteira ao 1º contato, com esperas limitadas a 10 s.
+
+## Agendamento
+Na etapa **Agendamento**, marque “Agendar” e escolha data e hora (horário de Brasília). A campanha fica salva no servidor e começa sozinha. Dá para agendar várias; o quadro **Campanhas** lista todas, com “Iniciar agora”, “Cancelar” e “Remover”.
 
 Local dos arquivos: `~/.disparador/` ao rodar direto com Node (fora da pasta do projeto, então substituir o código não apaga nada); `/app/data` no Docker, no volume `disparador-data`. Evite `docker compose down -v`, que apaga o volume. O botão **Limpar** no topo apaga só o rascunho do disparo, não as configurações.
  Chaves e valores de header nunca voltam para o navegador (aparecem mascaradas); deixar o campo em branco mantém o valor salvo.
 
-## Payload enviado ao webhook (modo N8N) (POST JSON, um por contato)
+## Payload enviado ao webhook (modo N8N) (POST JSON, um por mensagem da sequência)
 ```json
 {
   "campaign_id": "uuid",
   "index": 1,
   "total": 250,
+  "step": 1,
+  "steps": 3,
   "phone": "5511999998888",
   "message": "Olá Maria, ...",
   "fields": { "nome": "Maria", "cidade": "SP", "...": "todas as colunas do CSV" }
@@ -44,7 +58,7 @@ No N8N: Webhook (POST) → nó de WhatsApp (Evolution API / Z-API / WhatsApp Clo
 Responda rápido (Respond: Immediately) para o disparador não esperar o envio terminar.
 
 ## Anexos (imagem, vídeo, documento)
-Na etapa **Mensagem** dá para anexar um arquivo (até 50 MB); o texto vira a legenda. O mesmo arquivo vai para todos os contatos do disparo. Os arquivos ficam em `media/` dentro da pasta de dados.
+Cada mensagem da sequência pode ter um anexo (até 50 MB); o texto dela vira a legenda. O mesmo arquivo vai para todos os contatos do disparo. Os arquivos ficam em `media/` dentro da pasta de dados.
 - **Evolution direto**: usa `POST /message/sendMedia/{instancia}` com o arquivo em base64 (v1 e v2).
 - **N8N**: o payload ganha o campo `media`, e o arquivo é baixado pela URL (precisa ser acessível pelo N8N, então use o domínio público com HTTPS):
 ```json
@@ -54,6 +68,6 @@ A rota `/media/<id>` é pública (o N8N precisa baixar sem login), protegida por
 
 ## Notas
 - A fila roda no servidor: pode fechar o navegador. Ao reabrir, o andamento é retomado.
-- O estado da fila fica em memória: reiniciar o container interrompe campanhas em andamento.
+- As campanhas ficam salvas em `campaigns.json`: reiniciar o container retoma as agendadas e as em andamento. Se reiniciar no meio da espera entre mensagens, a próxima sai logo ao voltar.
 - Telefones sem DDI (10–11 dígitos) recebem o DDI padrão (55); inválidos são ignorados.
 - Disparo em massa viola os termos do WhatsApp se feito sem opt-in; use números aquecidos e cadência conservadora.
