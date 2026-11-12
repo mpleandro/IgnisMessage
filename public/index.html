@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><filter id="outline" color-interpolation-filters="sRGB"><feMorphology in="SourceAlpha" operator="erode" radius="1" result="in"/><feComposite in="SourceGraphic" in2="in" operator="out"/></filter></svg>
@@ -53,22 +54,44 @@
     <p class="muted">Cada contato recebe as mensagens abaixo em ordem, como numa conversa (ex.: “Oi, bom dia!” … “Como vai?”).
       A partir da 2ª, o disparador espera um tempo aleatório entre o mínimo e o máximo antes de enviar.
       Mensagens vazias (sem texto e sem anexo) são ignoradas.</p>
-    <div id="steps"></div>
-    <button id="addStep" type="button" class="add-step">+ Adicionar mensagem à sequência</button>
-    <p class="muted">Use <code>{{campo}}</code> com o nome exato de uma coluna do CSV, em qualquer mensagem. Campos que não existirem no CSV usarão sempre o valor padrão.</p>
-    <div id="vars"></div>
+    <div class="compose">
+      <div class="compose-edit">
+        <div id="steps"></div>
+        <button id="addStep" type="button" class="add-step">+ Adicionar mensagem à sequência</button>
+        <p class="muted">Use <code>{{campo}}</code> com o nome exato de uma coluna do CSV, em qualquer mensagem. Campos que não existirem no CSV usarão sempre o valor padrão.
+          Formatação do WhatsApp: <code>*negrito*</code> <code>_itálico_</code> <code>~riscado~</code> <code>```mono```</code>.</p>
+        <details class="btn-help">
+          <summary>Sobre os botões</summary>
+          <p class="muted">Botões (link, resposta rápida, ligar) são <b>experimentais</b> em números comuns de WhatsApp: o WhatsApp só os garante na API oficial (Cloud API).
+            <b>Evolution v2</b>: enviados via <code>sendButtons</code> — teste antes no seu número, pois alguns aparelhos/versões podem não exibir.
+            <b>Evolution v1</b>: viram texto no fim da mensagem (“▸ Texto: link”).
+            <b>N8N</b>: vão no campo <code>buttons</code> do payload, e <code>message_with_buttons</code> traz a versão em texto.
+            Até 3 botões por mensagem, sem anexo na mesma mensagem.</p>
+        </details>
+        <div id="vars"></div>
+      </div>
+      <aside class="wa-wrap" aria-label="Simulação no WhatsApp">
+        <div class="wa-phone">
+          <div class="wa-top">
+            <span class="wa-back">‹</span>
+            <div class="wa-avatar" id="waAvatar">?</div>
+            <div class="wa-id"><b id="waName">Contato</b><small id="previewPhone">—</small></div>
+          </div>
+          <div class="wa-chat" id="preview"></div>
+          <div class="wa-bottom"><span class="wa-field">Mensagem</span><span class="wa-mic"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5.3-3a5.3 5.3 0 0 1-10.6 0H5a7 7 0 0 0 6 6.9V22h2v-3.1a7 7 0 0 0 6-6.9h-1.7Z"/></svg></span></div>
+        </div>
+        <div class="row nav wa-nav">
+          <button id="prev" type="button" aria-label="Contato anterior">←</button>
+          <span id="previewPos" class="muted">—</span>
+          <button id="next" type="button" aria-label="Próximo contato">→</button>
+        </div>
+      </aside>
+    </div>
   </section>
 
   <section class="card">
-    <div class="group-label"><span>4</span>Pré-visualização</div>
-    <div class="row nav">
-      <button id="prev" type="button">←</button>
-      <span id="previewPos" class="muted">—</span>
-      <button id="next" type="button">→</button>
-    </div>
-    <div id="previewPhone" class="muted"></div>
-    <div id="preview" class="thread"><div class="bubble">Carregue o CSV e escreva a mensagem.</div></div>
-    <p id="stats" class="muted"></p>
+    <div class="group-label"><span>4</span>Revisão dos contatos</div>
+    <p id="stats" class="muted">Carregue o CSV ou digite números.</p>
     <details id="invalidBox" hidden>
       <summary id="invalidSummary"></summary>
       <button id="downloadInvalid" type="button">Baixar CSV dos inválidos</button>
@@ -112,10 +135,19 @@
     </div>
   </section>
 
-  <section class="card actions">
-    <button id="testBtn" type="button">Enviar teste (1º contato)</button>
-    <button id="startBtn" type="button" class="primary">Iniciar disparo</button>
-    <span id="testResult" class="muted"></span>
+  <section class="card">
+    <div class="group-label"><span>7</span>Teste e disparo</div>
+    <div class="test-row">
+      <label>Número para teste
+        <input id="testPhone" inputmode="tel" placeholder="(11) 99999-8888">
+      </label>
+      <button id="testBtn" type="button" class="test-btn">Enviar teste</button>
+    </div>
+    <p id="testHint" class="muted">O teste vai só para este número, com os dados do contato exibido na simulação (esperas limitadas a 10 s).</p>
+    <div class="actions">
+      <button id="startBtn" type="button" class="primary">Iniciar disparo</button>
+      <span id="testResult" class="muted"></span>
+    </div>
   </section>
 
   <section class="card" id="campaignsCard" hidden>

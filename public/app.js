@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const newStep = (text = '') => ({ text, media: null, delayMin: 3, delayMax: 8 });
+const newStep = (text = '') => ({ text, media: null, buttons: [], delayMin: 3, delayMax: 8 });
 const state = {
   csvRows: [], manual: [], headers: [], defaults: {}, varKey: '', previewIdx: 0,
   campaignId: null, timer: null, listTimer: null,
@@ -87,7 +87,24 @@ const MEDIA_MAX = 50 * 1024 * 1024;
 const MEDIA_ICON = { image: '🖼', video: '🎬', document: '📄' };
 const MEDIA_LABEL = { image: 'imagem', video: 'vídeo', document: 'documento' };
 const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
-const hasContent = (s) => !!(s.text.trim() || s.media);
+const hasContent = (s) => !!(s.text.trim() || s.media || s.buttons.length);
+const MAX_BUTTONS = 3;
+const BTN_TYPES = { url: 'Abrir link', reply: 'Resposta rápida', call: 'Ligar' };
+const BTN_PH = { url: 'https://seusite.com/pagina', call: '5511999998888' };
+const isUrl = (u) => { try { return ['http:', 'https:'].includes(new URL(u).protocol); } catch { return false; } };
+
+function renderButtons(s) {
+  if (!s.buttons.length) return '';
+  return `<div class="step-btns">${s.buttons.map((b, k) => `
+    <div class="btn-row" data-b="${k}">
+      <select data-k="btn-type" aria-label="Tipo do botão">${Object.entries(BTN_TYPES).map(([v, l]) =>
+        `<option value="${v}" ${b.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <input data-k="btn-text" maxlength="25" placeholder="Texto do botão" value="${esc(b.text)}" aria-label="Texto do botão">
+      ${b.type === 'reply' ? '<span class="btn-novalue muted">a pessoa toca e responde com o texto</span>'
+        : `<input data-k="btn-value" placeholder="${BTN_PH[b.type]}" value="${esc(b.value || '')}" aria-label="${b.type === 'url' ? 'Link' : 'Telefone'}">`}
+      <button type="button" data-act="rmbtn" class="danger" title="Remover botão">✕</button>
+    </div>`).join('')}</div>`;
+}
 const deleteMediaOnServer = (m) => { if (m) fetch('/api/media/' + m.id, { method: 'DELETE' }).catch(() => {}); };
 
 function renderSteps() {
@@ -109,13 +126,18 @@ function renderSteps() {
       </div>` : ''}
       <textarea rows="${j === 0 ? 5 : 3}" data-k="text" placeholder="${j === 0 ? 'Oi {{nome}}, bom dia!' : 'Como vai?'}">${esc(s.text)}</textarea>
       <div class="step-attach">
-        <label class="file-btn">${s.media ? 'Trocar anexo' : '+ Anexo'}<input type="file" data-k="media" hidden
-          accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"></label>
+        <button type="button" data-act="link" class="tool-btn" title="Inserir link na posição do cursor">🔗 Link</button>
+        <button type="button" data-act="addbtn" class="tool-btn" ${s.media || s.buttons.length >= MAX_BUTTONS ? 'disabled' : ''}
+          title="${s.media ? 'Botões não podem ser combinados com anexo' : `Até ${MAX_BUTTONS} botões`}">+ Botão</button>
+        ${s.buttons.length ? '' : `<label class="file-btn">${s.media ? 'Trocar anexo' : '+ Anexo'}<input type="file" data-k="media" hidden
+          accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"></label>`}
         <span class="muted">${s.uploading ? 'Enviando arquivo…' : s.media
           ? `${MEDIA_ICON[s.media.type]} ${esc(s.media.name)} · ${fmtSize(s.media.size)} · ${MEDIA_LABEL[s.media.type]} (o texto vira legenda)`
-          : 'Imagem, vídeo ou documento (opcional, máx. 50 MB)'}</span>
+          : s.buttons.length ? `${s.buttons.length}/${MAX_BUTTONS} botões (experimental — veja “Sobre os botões”)`
+            : 'Imagem, vídeo ou documento (opcional, máx. 50 MB)'}</span>
         ${s.media ? '<button type="button" data-act="unmedia" class="link-btn">Remover anexo</button>' : ''}
       </div>
+      ${renderButtons(s)}
     </div>`).join('');
   $('addStep').disabled = n >= MAX_STEPS;
 }
@@ -128,11 +150,31 @@ $('steps').addEventListener('focusin', (e) => {
 
 $('steps').addEventListener('input', (e) => {
   const k = e.target.dataset.k;
-  if (!k || k === 'media') return;
+  if (!k || k === 'media' || k === 'btn-type') return;
   const s = state.steps[stepIndex(e.target)];
-  s[k] = k === 'text' ? e.target.value : Math.max(0, Number(e.target.value) || 0);
+  if (k === 'btn-text' || k === 'btn-value') {
+    s.buttons[Number(e.target.closest('.btn-row').dataset.b)][k === 'btn-text' ? 'text' : 'value'] = e.target.value;
+  } else s[k] = k === 'text' ? e.target.value : Math.max(0, Number(e.target.value) || 0);
   renderPreview();
 });
+
+// Insere um link no texto da mensagem, na posição do cursor.
+function insertLink(j) {
+  let url = (prompt('Link (URL):', 'https://') || '').trim();
+  if (!url || url === 'https://') return;
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  if (!isUrl(url)) return alert('Link inválido.');
+  const label = (prompt('Texto antes do link (opcional) — ex.: “Garanta sua vaga”', '') || '').trim();
+  const s = state.steps[j];
+  const ta = $('steps').querySelector(`.step[data-i="${j}"] textarea`);
+  const a = ta.selectionStart ?? s.text.length, b = ta.selectionEnd ?? s.text.length;
+  const before = s.text.slice(0, a), after = s.text.slice(b);
+  const ins = (before && !/\s$/.test(before) ? '\n' : '') + (label ? `${label}: ${url}` : url) + (after && !/^\s/.test(after) ? '\n' : '');
+  s.text = before + ins + after;
+  ta.value = s.text;
+  ta.focus();
+  ta.setSelectionRange(a + ins.length, a + ins.length);
+}
 
 $('steps').addEventListener('click', (e) => {
   const act = e.target.dataset.act;
@@ -148,6 +190,16 @@ $('steps').addEventListener('click', (e) => {
   } else if (act === 'unmedia') {
     deleteMediaOnServer(steps[j].media);
     steps[j].media = null;
+  } else if (act === 'link') {
+    insertLink(j);
+    state.focusStep = j;
+    renderPreview();
+    scheduleSave();
+    return; // não re-renderiza os passos (manteria o cursor no texto)
+  } else if (act === 'addbtn' && !steps[j].media && steps[j].buttons.length < MAX_BUTTONS) {
+    steps[j].buttons.push({ type: 'url', text: '', value: '' });
+  } else if (act === 'rmbtn') {
+    steps[j].buttons.splice(Number(e.target.closest('.btn-row').dataset.b), 1);
   } else return;
   state.focusStep = Math.min(state.focusStep, steps.length - 1);
   renderSteps();
@@ -156,6 +208,14 @@ $('steps').addEventListener('click', (e) => {
 });
 
 $('steps').addEventListener('change', async (e) => {
+  if (e.target.dataset.k === 'btn-type') {
+    const b = state.steps[stepIndex(e.target)].buttons[Number(e.target.closest('.btn-row').dataset.b)];
+    b.type = e.target.value;
+    b.value = '';
+    renderSteps();
+    renderPreview();
+    return;
+  }
   if (e.target.dataset.k !== 'media') return;
   const step = state.steps[stepIndex(e.target)]; // guarda o objeto: continua certo mesmo se a ordem mudar durante o upload
   const file = e.target.files[0];
@@ -343,31 +403,85 @@ function analyze() {
 
 const fmtDelay = (s) => (s.delayMin >= s.delayMax ? `${s.delayMin}s` : `${s.delayMin}–${s.delayMax}s`);
 
+// ---------- Simulação no WhatsApp ----------
+const URL_RE = /(https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]'])/gi;
+
+// Formatação do WhatsApp (*negrito* _itálico_ ~riscado~ ```mono```) sobre texto já escapado.
+function waInline(t) {
+  return esc(t)
+    .replace(/```([\s\S]+?)```/g, '<code class="wa-mono">$1</code>')
+    .replace(/(^|[\s(])\*(\S(?:[^*\n]*?\S)?)\*(?=[\s).,!?:;]|$)/g, '$1<b>$2</b>')
+    .replace(/(^|[\s(])_(\S(?:[^_\n]*?\S)?)_(?=[\s).,!?:;]|$)/g, '$1<i>$2</i>')
+    .replace(/(^|[\s(])~(\S(?:[^~\n]*?\S)?)~(?=[\s).,!?:;]|$)/g, '$1<s>$2</s>');
+}
+function waFormat(text) {
+  let out = '', last = 0;
+  for (const m of text.matchAll(URL_RE)) {
+    out += waInline(text.slice(last, m.index)) + `<a href="${esc(m[0])}" target="_blank" rel="noopener noreferrer">${esc(m[0])}</a>`;
+    last = m.index + m[0].length;
+  }
+  return out + waInline(text.slice(last));
+}
+const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
+const brTime = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+const TICKS = '<svg class="wa-ticks" viewBox="0 0 16 11" width="16" height="11" aria-hidden="true"><path fill="currentColor" d="M11.07.66 10.4.1a.4.4 0 0 0-.56.07L4.6 6.9 2.3 4.7a.4.4 0 0 0-.56 0l-.6.6a.4.4 0 0 0 0 .56l3.2 3.1c.17.16.44.15.6-.03l6.2-7.7a.4.4 0 0 0-.07-.57Zm3.97 0-.67-.56a.4.4 0 0 0-.56.07L8.57 6.9l-.5-.48-.85 1.05 1.12 1.08c.17.16.44.15.6-.03l6.2-7.7a.4.4 0 0 0-.1-.57Z"/></svg>';
+const BTN_ICON = { url: '↗', reply: '↩', call: '✆' };
+
+function waMedia(m) {
+  if (m.type === 'image') return `<img class="wa-img" src="/media/${encodeURIComponent(m.id)}/${encodeURIComponent(m.name)}" alt="">`;
+  if (m.type === 'video') return `<div class="wa-video"><span>▶</span><small>${esc(m.name)}</small></div>`;
+  const ext = (m.name.split('.').pop() || 'doc').slice(0, 4).toUpperCase();
+  return `<div class="wa-doc"><span class="wa-doc-ic">${esc(ext)}</span><div><b>${esc(m.name)}</b><small>${fmtSize(m.size)} · ${esc(ext)}</small></div></div>`;
+}
+
+function waBubble(s, text, time, first) {
+  const empty = !text.trim() && !s.media && !s.buttons.length;
+  if (empty) return `<div class="wa-msg out${first ? ' tail' : ''} empty">(vazia para este contato — não será enviada)</div>`;
+  const url = !s.media && (text.match(URL_RE) || [])[0];
+  const card = url ? `<div class="wa-link"><b>${esc(hostOf(url))}</b><small>${esc(url)}</small></div>` : '';
+  const btns = s.buttons.length
+    ? `<div class="wa-btns">${s.buttons.map((b) => `<div class="wa-btn"><span>${BTN_ICON[b.type]}</span>${esc(b.text || 'Botão sem texto')}</div>`).join('')}</div>` : '';
+  return `<div class="wa-msg out${first ? ' tail' : ''}${s.media ? ' has-media' : ''}${btns ? ' has-btns' : ''}">
+    ${s.media ? waMedia(s.media) : ''}${card}
+    <div class="wa-text">${waFormat(text)}<span class="wa-meta">${time}${TICKS}</span></div>${btns}</div>`;
+}
+
+const NAME_COL_RE = /^(nome|name|primeiro.?nome|first.?name|cliente|contato)$/i;
+
 function renderPreview() {
   renderVars(false);
   const rows = allRows();
   const n = rows.length;
   const steps = activeSteps();
+  const chat = $('preview');
+  // Sem contatos, simula com uma linha vazia (as variáveis usam o valor padrão).
+  state.previewIdx = n ? Math.min(Math.max(state.previewIdx, 0), n - 1) : 0;
+  const row = n ? rows[state.previewIdx].row : {};
+  const item = buildItem(row);
+  const nameCol = state.headers.find((h) => NAME_COL_RE.test(norm(h)));
+  const name = (nameCol && String(row[nameCol] ?? '').trim()) || (item.phone ? `+${item.phone}` : 'Contato');
+  $('waName').textContent = name;
+  $('waAvatar').textContent = (name.replace(/[^\p{L}\d]/gu, '')[0] || '?').toUpperCase();
+  $('previewPos').textContent = n ? `Contato ${state.previewIdx + 1} de ${n}` : 'Sem contatos — usando valores padrão';
+  $('previewPhone').textContent = !n ? 'online' : !item.phone ? `⚠ ${item.error}` : name === `+${item.phone}` ? 'online' : `+${item.phone}`;
+  $('prev').disabled = state.previewIdx <= 0;
+  $('next').disabled = state.previewIdx >= n - 1;
+
+  if (!steps.length) {
+    chat.innerHTML = '<div class="wa-day">HOJE</div><div class="wa-sys">Escreva uma mensagem ao lado para ver como ela chega.</div>';
+  } else {
+    let t = Date.now();
+    chat.innerHTML = '<div class="wa-day">HOJE</div>' + steps.map((s, j) => {
+      if (j) t += ((s.delayMin + s.delayMax) / 2) * 1000;
+      return (j ? `<div class="wa-wait">⏱ ${fmtDelay(s)} depois</div>` : '') + waBubble(s, item.messages[j], brTime.format(t), j === 0);
+    }).join('');
+  }
+
   if (!n || !steps.length) {
-    $('preview').innerHTML = '<div class="bubble">Carregue o CSV ou digite números, e escreva a mensagem.</div>';
-    $('previewPos').textContent = '—';
-    $('previewPhone').textContent = '';
-    $('stats').textContent = '';
+    $('stats').textContent = n ? '' : 'Carregue o CSV ou digite números.';
     $('invalidBox').hidden = true;
     return;
   }
-  state.previewIdx = Math.min(Math.max(state.previewIdx, 0), n - 1);
-  const item = buildItem(rows[state.previewIdx].row);
-  $('previewPos').textContent = `Contato ${state.previewIdx + 1} de ${n}`;
-  $('previewPhone').textContent = item.phone ? `Para: +${item.phone}` : `⚠ ${item.error}`;
-  $('preview').innerHTML = steps.map((s, j) => {
-    const text = item.messages[j];
-    const empty = !text.trim() && !s.media;
-    return (j ? `<div class="wait">⏱ aguarda ${fmtDelay(s)}</div>` : '') +
-      `<div class="bubble${empty ? ' empty' : ''}">${s.media ? `${MEDIA_ICON[s.media.type]} ${esc(s.media.name)}\n` : ''}` +
-      `${empty ? '(vazia para este contato — não será enviada)' : esc(text)}</div>`;
-  }).join('');
-
   const { valid, invalid, emptyFields } = analyze();
   state.invalid = invalid;
   $('stats').textContent =
@@ -478,30 +592,56 @@ async function api(path, body) {
 }
 
 function stepsPayload() {
-  return activeSteps().map((s) => ({ mediaId: s.media && s.media.id, delayMin: s.delayMin, delayMax: s.delayMax }));
+  return activeSteps().map((s) => ({
+    mediaId: s.media && s.media.id, delayMin: s.delayMin, delayMax: s.delayMax,
+    buttons: s.media ? [] : s.buttons.map(({ type, text, value }) => ({ type, text: text.trim(), value: (value || '').trim() })),
+  }));
+}
+
+// Retorna o primeiro problema nos botões, ou null.
+function buttonsError() {
+  for (const [j, s] of state.steps.entries()) {
+    for (const b of s.buttons) {
+      if (!b.text.trim()) return `Mensagem ${j + 1}: há um botão sem texto.`;
+      if (b.type === 'url' && !isUrl((b.value || '').trim())) return `Mensagem ${j + 1}: o botão “${b.text}” precisa de um link começando com https://`;
+      if (b.type === 'call' && (b.value || '').replace(/\D/g, '').length < 10) return `Mensagem ${j + 1}: o botão “${b.text}” precisa de um telefone com DDI e DDD.`;
+    }
+  }
+  return null;
 }
 
 function validItems() {
   return analyze().valid.map(({ phone, messages, fields }) => ({ phone, messages, fields }));
 }
 
-function checkReady() {
+function checkMessages() {
   if (state.uploading > 0) return 'Aguarde o envio dos anexos terminar.';
   if (!activeSteps().length) return 'Escreva ao menos uma mensagem ou anexe um arquivo.';
-  if (!validItems().length) return 'Nenhum contato válido.';
-  return null;
+  return buttonsError();
 }
 
+function checkReady() {
+  return checkMessages() || (validItems().length ? null : 'Nenhum contato válido.');
+}
+
+// O teste vai SEMPRE para o número digitado, usando os dados do contato exibido na simulação.
 $('testBtn').addEventListener('click', async () => {
-  const err = checkReady();
+  const err = checkMessages();
   if (err) return alert(err);
+  const typed = $('testPhone').value.trim();
+  if (!typed) { $('testPhone').focus(); return alert('Digite o número que vai receber o teste.'); }
+  const { phone, error } = checkPhone(typed);
+  if (error) { $('testPhone').focus(); return alert(`Número de teste inválido: ${error}`); }
+  const rows = allRows();
+  const row = rows.length ? rows[Math.min(state.previewIdx, rows.length - 1)].row : {};
+  const { messages, fields } = buildItem({ ...row, [phoneKey()]: phone });
   const n = activeSteps().length;
-  $('testResult').textContent = n > 1 ? `Enviando sequência de ${n} mensagens (esperas limitadas a 10s no teste)…` : 'Enviando…';
+  $('testResult').textContent = `Enviando ${n > 1 ? `sequência de ${n} mensagens` : 'teste'} para +${phone}${n > 1 ? ' (esperas limitadas a 10s)' : ''}…`;
   try {
-    const r = await api('/api/test', { item: validItems()[0], steps: stepsPayload() });
+    const r = await api('/api/test', { item: { phone, messages, fields }, steps: stepsPayload() });
     const okCount = r.results.filter((x) => x.ok).length;
     $('testResult').textContent = r.ok
-      ? `✔ ${okCount} mensagem(ns) aceitas pelo destino`
+      ? `✔ ${okCount} mensagem(ns) aceitas pelo destino para +${phone}`
       : `✖ Falhou na mensagem ${r.results.length ? r.results[r.results.length - 1].step : '?'} (${r.status ?? '—'}): ${r.body ?? 'nada enviado'}`;
   } catch (e) { $('testResult').textContent = '✖ ' + e.message; }
 });
@@ -632,7 +772,7 @@ fetch('/api/campaigns').then((r) => r.json()).then((list) => {
 }).catch(() => {});
 
 // ---------- Rascunho persistente (salvo no servidor: draft.json) ----------
-const FORM_IDS = ['manualNumbers', 'ddi', 'minDelay', 'maxDelay', 'batchSize', 'batchPause', 'windowStart', 'windowEnd', 'scheduleAt'];
+const FORM_IDS = ['manualNumbers', 'testPhone', 'ddi', 'minDelay', 'maxDelay', 'batchSize', 'batchPause', 'windowStart', 'windowEnd', 'scheduleAt'];
 let saveTimer = null;
 const setSaveState = (t) => { $('saveState').textContent = t; };
 
@@ -640,7 +780,7 @@ function collectForm() {
   const f = {
     defaults: state.defaults,
     phoneCol: $('phoneCol').value,
-    steps: state.steps.map(({ text, media, delayMin, delayMax }) => ({ text, media, delayMin, delayMax })),
+    steps: state.steps.map(({ text, media, buttons, delayMin, delayMax }) => ({ text, media, buttons, delayMin, delayMax })),
     windowEnabled: $('windowEnabled').checked,
     scheduleEnabled: $('scheduleEnabled').checked,
     days: [...$('days').querySelectorAll('input:checked')].map((i) => Number(i.value)),
@@ -685,6 +825,11 @@ function restoreSteps(f) {
     return f.steps.slice(0, MAX_STEPS).map((s) => ({
       text: typeof s.text === 'string' ? s.text : '',
       media: validMedia(s.media),
+      buttons: (Array.isArray(s.buttons) ? s.buttons : []).slice(0, MAX_BUTTONS).map((b) => ({
+        type: BTN_TYPES[b && b.type] ? b.type : 'url',
+        text: typeof (b && b.text) === 'string' ? b.text : '',
+        value: typeof (b && b.value) === 'string' ? b.value : '',
+      })),
       delayMin: Math.max(0, Number(s.delayMin) || 0),
       delayMax: Math.max(0, Number(s.delayMax) || 0),
     }));

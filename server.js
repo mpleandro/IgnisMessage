@@ -323,10 +323,29 @@ async function http(url, { method = 'POST', headers = {}, body } = {}) {
 
 const evoUrl = (e, route) => `${e.baseUrl.replace(/\/+$/, '')}${route}/${encodeURIComponent(e.instance)}`;
 
+// Botões viram texto quando o destino não suporta botões (Evolution v1).
+function buttonsAsText(message, buttons) {
+  const lines = buttons.map((b) => (b.type === 'reply' ? `▸ ${b.text}` : `▸ ${b.text}: ${b.type === 'call' ? '+' + b.value : b.value}`));
+  return [message, lines.join('\n')].filter((s) => s.trim()).join('\n\n');
+}
+const hasUrl = (t) => /https?:\/\/\S/i.test(t);
+
 // Entrega UMA mensagem (um passo da sequência) pelo destino configurado (N8N ou Evolution direto).
-function deliver(dest, item, meta, media) {
+function deliver(dest, item, meta, step) {
+  const media = step && step.media;
+  const buttons = (step && step.buttons) || [];
   if (dest.mode === 'evolution') {
     const e = dest.evolution;
+    if (buttons.length && e.version === 'v2') {
+      const body = {
+        number: item.phone, title: '', description: item.message, footer: '',
+        buttons: buttons.map((b, k) => (b.type === 'url' ? { type: 'url', displayText: b.text, url: b.value }
+          : b.type === 'call' ? { type: 'call', displayText: b.text, phoneNumber: b.value }
+            : { type: 'reply', displayText: b.text, id: `btn_${k + 1}` })),
+      };
+      return http(evoUrl(e, '/message/sendButtons'), { headers: { apikey: e.apiKey }, body });
+    }
+    if (buttons.length) item = { ...item, message: buttonsAsText(item.message, buttons) };
     if (media) {
       let data;
       try { data = fs.readFileSync(mediaPath(media.id)).toString('base64'); }
@@ -336,9 +355,10 @@ function deliver(dest, item, meta, media) {
         : { number: item.phone, mediatype: media.type, mimetype: media.mimetype, caption: item.message, media: data, fileName: media.name };
       return http(evoUrl(e, '/message/sendMedia'), { headers: { apikey: e.apiKey }, body });
     }
+    const preview = hasUrl(item.message); // mostra o cartão de prévia do link
     const body = e.version === 'v1'
-      ? { number: item.phone, textMessage: { text: item.message } }
-      : { number: item.phone, text: item.message };
+      ? { number: item.phone, options: { linkPreview: preview }, textMessage: { text: item.message } }
+      : { number: item.phone, text: item.message, linkPreview: preview };
     return http(evoUrl(e, '/message/sendText'), { headers: { apikey: e.apiKey }, body });
   }
   const n = dest.n8n;
@@ -348,6 +368,7 @@ function deliver(dest, item, meta, media) {
     body: {
       ...meta, phone: item.phone, message: item.message, fields: item.fields || {},
       ...(media ? { media: { type: media.type, mimetype: media.mimetype, fileName: media.name, size: media.size, url: media.url } } : {}),
+      ...(buttons.length ? { buttons, message_with_buttons: buttonsAsText(item.message, buttons) } : {}),
     },
   });
 }
@@ -438,7 +459,10 @@ async function waitWhilePaused(c) {
 
 // Próximo passo (a partir de j) com conteúdo para este contato; -1 se não houver.
 function nextStep(c, msgs, j) {
-  for (; j < c.steps.length; j++) if (String(msgs[j] ?? '').trim() || c.steps[j].media) return j;
+  for (; j < c.steps.length; j++) {
+    const s = c.steps[j];
+    if (String(msgs[j] ?? '').trim() || s.media || (s.buttons && s.buttons.length)) return j;
+  }
   return -1;
 }
 
@@ -484,7 +508,7 @@ async function runCampaign(c) {
         cfg.dest,
         { phone: item.phone, message: String(msgs[j] ?? ''), fields: item.fields },
         { campaign_id: c.id, index: i + 1, total: c.items.length, step: j + 1, steps: c.steps.length },
-        st.media
+        st
       );
       c.log.push({ index: i + 1, step: j + 1, phone: item.phone, ok: result.ok, status: result.status, info: result.ok ? '' : result.body, at: Date.now() });
       if (c.log.length > 500) c.log.shift();
@@ -563,7 +587,28 @@ function summary(c, withLog) {
 // ---------- Validação do que vem do front ----------
 const MAX_STEPS = 20;
 
-// Passos da sequência: [{ mediaId, delayMin, delayMax }]. Formato antigo (sem steps) = 1 passo com body.mediaId.
+// Botões de uma mensagem: [{ type: 'url'|'reply'|'call', text, value }], até 3.
+const MAX_BUTTONS = 3;
+function parseButtons(raw, j) {
+  if (!Array.isArray(raw) || !raw.length) return { buttons: [] };
+  if (raw.length > MAX_BUTTONS) return { error: `Mensagem ${j + 1}: no máximo ${MAX_BUTTONS} botões` };
+  const buttons = [];
+  for (const b of raw) {
+    const type = ['url', 'reply', 'call'].includes(b && b.type) ? b.type : 'url';
+    const text = str(b && b.text).slice(0, 25);
+    let value = str(b && b.value);
+    if (!text) return { error: `Mensagem ${j + 1}: botão sem texto` };
+    if (type === 'url' && !isHttpUrl(value)) return { error: `Mensagem ${j + 1}: link do botão “${text}” inválido` };
+    if (type === 'call') {
+      value = value.replace(/\D/g, '');
+      if (value.length < 10) return { error: `Mensagem ${j + 1}: telefone do botão “${text}” inválido` };
+    }
+    buttons.push(type === 'reply' ? { type, text } : { type, text, value });
+  }
+  return { buttons };
+}
+
+// Passos da sequência: [{ mediaId, buttons, delayMin, delayMax }]. Formato antigo (sem steps) = 1 passo com body.mediaId.
 function parseSteps(req, body) {
   const raw = Array.isArray(body.steps) && body.steps.length ? body.steps : [{ mediaId: body.mediaId }];
   if (raw.length > MAX_STEPS) return { error: `No máximo ${MAX_STEPS} mensagens por sequência` };
@@ -574,7 +619,10 @@ function parseSteps(req, body) {
     if (media === undefined) return { error: `Anexo da mensagem ${j + 1} não encontrado. Anexe novamente.` };
     const delayMin = j ? Math.max(0, Number(s.delayMin) || 0) : 0;
     const delayMax = j ? Math.max(delayMin, Number(s.delayMax) || delayMin) : 0;
-    steps.push({ media, delayMin, delayMax });
+    const pb = parseButtons(s.buttons, j);
+    if (pb.error) return { error: pb.error };
+    if (pb.buttons.length && media) return { error: `Mensagem ${j + 1}: botões não podem ser combinados com anexo` };
+    steps.push({ media, buttons: pb.buttons, delayMin, delayMax });
   }
   return { steps };
 }
@@ -600,7 +648,7 @@ function parseBrasilia(local) {
   return new Date(local + ':00-03:00').getTime();
 }
 
-// Envia a sequência inteira para 1 contato. As esperas entre mensagens ficam limitadas a 10s no teste.
+// Envia a sequência inteira para o número de teste digitado. As esperas entre mensagens ficam limitadas a 10s no teste.
 app.post('/api/test', async (req, res) => {
   const err = destError(settings);
   if (err) return res.status(400).json({ error: err });
@@ -608,13 +656,14 @@ app.post('/api/test', async (req, res) => {
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const { steps } = parsed;
   const [item] = parseItems([req.body.item], steps.length);
-  if (!item) return res.status(400).json({ error: 'Contato de teste inválido' });
+  if (item) item.phone = item.phone.replace(/\D/g, '');
+  if (!item || item.phone.length < 10) return res.status(400).json({ error: 'Número de teste inválido' });
   const fake = { steps };
   const results = [];
   let j = nextStep(fake, item.messages, 0);
   while (j >= 0) {
     const r = await deliver(settings, { phone: item.phone, message: item.messages[j], fields: item.fields },
-      { campaign_id: 'teste', index: 1, total: 1, step: j + 1, steps: steps.length }, steps[j].media);
+      { campaign_id: 'teste', index: 1, total: 1, step: j + 1, steps: steps.length }, steps[j]);
     results.push({ step: j + 1, ...r });
     if (!r.ok) break;
     j = nextStep(fake, item.messages, j + 1);

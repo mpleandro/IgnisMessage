@@ -33,7 +33,18 @@ Na etapa **Mensagens** cada contato recebe uma sequência, como numa conversa (�
 - Se uma mensagem falhar, o resto da sequência daquele contato não é enviado; o contato conta como falha.
 - A cadência geral (intervalo e pausa a cada N) vale **entre contatos**, depois que a sequência do contato termina.
 - A janela de horário é checada antes de começar cada contato; uma sequência iniciada vai até o fim.
-- O botão de teste envia a sequência inteira ao 1º contato, com esperas limitadas a 10 s.
+- Ao lado do editor, uma simulação do WhatsApp mostra como a sequência chega (formatação *negrito* _itálico_ ~riscado~, links, anexos, botões). As setas trocam o contato simulado.
+- **🔗 Link** insere um link no cursor (com texto opcional antes). Na Evolution, mensagens com link vão com `linkPreview: true`.
+- O teste vai **só para o número digitado** em “Número para teste”, usando os dados do contato exibido na simulação, com esperas limitadas a 10 s.
+
+## Botões (experimental)
+Até 3 por mensagem (abrir link, resposta rápida, ligar), sem anexo na mesma mensagem. O WhatsApp só garante botões na API oficial (Cloud API); em números comuns podem não aparecer em alguns aparelhos — teste antes.
+- **Evolution v2**: `POST /message/sendButtons/{instancia}` (`description` = texto, botões `url`/`reply`/`call`).
+- **Evolution v1**: os botões viram texto no fim da mensagem (`▸ Texto: link`).
+- **N8N**: o payload ganha `buttons: [{ type, text, value }]` e `message_with_buttons` (versão em texto).
+
+## Tema
+O switch no topo alterna claro/escuro (salvo no navegador; sem escolha, segue o sistema).
 
 ## Agendamento
 Na etapa **Agendamento**, marque “Agendar” e escolha data e hora (horário de Brasília). A campanha fica salva no servidor e começa sozinha. Dá para agendar várias; o quadro **Campanhas** lista todas, com “Iniciar agora”, “Cancelar” e “Remover”.
