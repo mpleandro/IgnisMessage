@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><filter id="outline" color-interpolation-filters="sRGB"><feMorphology in="SourceAlpha" operator="erode" radius="1" result="in"/><feComposite in="SourceGraphic" in2="in" operator="out"/></filter></svg>
 <div class="event-strip">MÉTODO IGNIS <span>✳</span> DISPARADOR WHATSAPP <span>✳</span> HORÁRIO DE BRASÍLIA</div>
 <header class="site-header wrap">
   <a class="brand" href="/"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="176" height="47"></a>
@@ -48,17 +49,14 @@
   </section>
 
   <section class="card">
-    <div class="group-label"><span>3</span>Mensagem</div>
-    <textarea id="message" rows="7" placeholder="Olá {{nome}}, tudo bem? Vi que você é de {{cidade}}..."></textarea>
-    <p class="muted">Use <code>{{campo}}</code> com o nome exato de uma coluna do CSV. Campos que não existirem no CSV usarão sempre o valor padrão.</p>
+    <div class="group-label"><span>3</span>Mensagens (sequência)</div>
+    <p class="muted">Cada contato recebe as mensagens abaixo em ordem, como numa conversa (ex.: “Oi, bom dia!” … “Como vai?”).
+      A partir da 2ª, o disparador espera um tempo aleatório entre o mínimo e o máximo antes de enviar.
+      Mensagens vazias (sem texto e sem anexo) são ignoradas.</p>
+    <div id="steps"></div>
+    <button id="addStep" type="button" class="add-step">+ Adicionar mensagem à sequência</button>
+    <p class="muted">Use <code>{{campo}}</code> com o nome exato de uma coluna do CSV, em qualquer mensagem. Campos que não existirem no CSV usarão sempre o valor padrão.</p>
     <div id="vars"></div>
-    <div class="attach">
-      <label>Anexo (opcional): imagem, vídeo ou documento — a mensagem acima vira a legenda
-        <input id="mediaFile" type="file" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip">
-      </label>
-      <p id="mediaInfo" class="muted">Nenhum anexo. Máx. 50 MB.</p>
-      <button id="mediaRemove" type="button" hidden>Remover anexo</button>
-    </div>
   </section>
 
   <section class="card">
@@ -69,7 +67,7 @@
       <button id="next" type="button">→</button>
     </div>
     <div id="previewPhone" class="muted"></div>
-    <div id="preview" class="bubble">Carregue o CSV e escreva a mensagem.</div>
+    <div id="preview" class="thread"><div class="bubble">Carregue o CSV e escreva a mensagem.</div></div>
     <p id="stats" class="muted"></p>
     <details id="invalidBox" hidden>
       <summary id="invalidSummary"></summary>
@@ -80,12 +78,13 @@
 
   <section class="card">
     <div class="group-label"><span>5</span>Cadência de envio</div>
+    <p class="muted">Tempo entre um contato e o próximo (depois que a sequência do contato termina).</p>
     <div class="row">
-      <label>Intervalo mínimo (s) <input id="minDelay" type="number" min="0" value="8"></label>
-      <label>Intervalo máximo (s) <input id="maxDelay" type="number" min="0" value="20"></label>
+      <label>Intervalo mínimo entre contatos (s) <input id="minDelay" type="number" min="0" value="8"></label>
+      <label>Intervalo máximo entre contatos (s) <input id="maxDelay" type="number" min="0" value="20"></label>
     </div>
     <div class="row">
-      <label>Pausar a cada (nº de msgs, 0 = nunca) <input id="batchSize" type="number" min="0" value="30"></label>
+      <label>Pausar a cada (nº de contatos, 0 = nunca) <input id="batchSize" type="number" min="0" value="30"></label>
       <label>Duração da pausa (s) <input id="batchPause" type="number" min="0" value="300"></label>
     </div>
     <p class="muted">Intervalos aleatórios e pausas reduzem o risco de bloqueio do número pelo WhatsApp.</p>
@@ -97,7 +96,19 @@
       </div>
       <div class="days" id="days"></div>
       <p class="muted">Horário de Brasília (America/Sao_Paulo). Agora em Brasília: <b id="brClock">—</b>.
-        Fora da janela o disparo fica em espera e retoma sozinho.</p>
+        Fora da janela o disparo fica em espera e retoma sozinho. Uma sequência já iniciada para um contato vai até o fim.</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="group-label"><span>6</span>Agendamento</div>
+    <label class="check"><input id="scheduleEnabled" type="checkbox"> Agendar o início para uma data e hora</label>
+    <div id="scheduleConfig" hidden>
+      <div class="row">
+        <label>Iniciar em (horário de Brasília) <input id="scheduleAt" type="datetime-local"></label>
+      </div>
+      <p class="muted">A campanha fica salva no servidor e começa sozinha nesse horário — pode fechar o navegador.
+        A cadência e a janela de horário acima continuam valendo. Você pode agendar várias campanhas.</p>
     </div>
   </section>
 
@@ -107,16 +118,22 @@
     <span id="testResult" class="muted"></span>
   </section>
 
+  <section class="card" id="campaignsCard" hidden>
+    <div class="group-label"><span>↗</span>Campanhas</div>
+    <div class="tablewrap"><table id="campaignList"><thead><tr><th>Início</th><th>Status</th><th>Contatos</th><th>Mensagens</th><th>Prévia</th><th></th></tr></thead><tbody></tbody></table></div>
+  </section>
+
   <section class="card" id="progressCard" hidden>
-    <div class="group-label"><span>↗</span>Andamento</div>
+    <div class="group-label"><span>↗</span>Andamento <small id="progressTitle"></small></div>
     <div class="bar"><div id="barFill"></div></div>
     <p id="progressText"></p>
     <div class="actions">
+      <button id="startNowBtn" type="button" hidden>Iniciar agora</button>
       <button id="pauseBtn" type="button">Pausar</button>
       <button id="resumeBtn" type="button" hidden>Retomar</button>
       <button id="cancelBtn" type="button" class="danger">Cancelar</button>
     </div>
-    <table id="log"><thead><tr><th>#</th><th>Telefone</th><th>Status</th><th>Detalhe</th></tr></thead><tbody></tbody></table>
+    <table id="log"><thead><tr><th>#</th><th>Msg</th><th>Telefone</th><th>Status</th><th>Detalhe</th></tr></thead><tbody></tbody></table>
   </section>
 </main>
 <footer class="wrap site-footer"><img src="assets/ignis-horizontal.png" alt="Método Ignis" width="120" height="32" loading="lazy"><span>MÉTODO IGNIS © 2026</span></footer>
